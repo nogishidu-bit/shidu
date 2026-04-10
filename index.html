@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <title>疲労度チェック rPPG PWA</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <link rel="manifest" href="manifest.json">
+  <meta name="theme-color" content="#111111">
+  <style>
+    body { margin:0; font-family: system-ui, sans-serif; background:#111; color:#eee; text-align:center; }
+    header { padding:10px 0; background:#181818; font-size:18px; font-weight:bold; }
+    main { padding:10px; }
+    video { width:260px; max-width:80vw; transform:scaleX(-1); border-radius:8px; margin-top:8px; }
+    #startBtn { padding:10px 20px; font-size:16px; margin:10px 0; border-radius:6px; border:none; background:#1e88e5; color:#fff; }
+    #startBtn:disabled { background:#555; }
+    #status { font-size:13px; color:#ccc; min-height:2em; white-space:pre-line; }
+    #results { margin-top:10px; font-size:14px; white-space:pre-line; }
+    #scoreBox { margin-top:10px; padding:10px; border-radius:8px; background:#222; display:inline-block; min-width:220px; }
+    .label { color:#aaa; font-size:12px; }
+    .value { font-size:18px; font-weight:bold; }
+    canvas { display:none; }
+  </style>
+</head>
+<body>
+<header>疲労度チェック rPPG（iPhone SE3）</header>
+<main>
+  <p>顔を画面中央に合わせて、30秒じっとしてください。</p>
+  <button id="startBtn">測定開始</button><br>
+  <video id="video" autoplay playsinline></video>
+  <canvas id="canvas" width="240" height="180"></canvas>
+
+  <div id="status"></div>
+
+  <div id="scoreBox">
+    <div class="label">疲労スコア（0〜100）</div>
+    <div class="value" id="fatigueScore">--</div>
+    <div id="results"></div>
+  </div>
+</main>
+
+<script>
+  const FPS = 30;
+  const DURATION_SEC = 30;
+  const video = document.getElementById('video');
+  const canvas = document.getElementById('canvas');
+  const ctx = canvas.getContext('2d');
+  const startBtn = document.getElementById('startBtn');
+  const statusEl = document.getElementById('status');
+  const resultsEl = document.getElementById('results');
+  const fatigueEl = document.getElementById('fatigueScore');
+
+  let rgbSeries = [];
+  let running = false;
+
+  function logStatus(msg) {
+    statusEl.textContent = msg;
+  }
+
+  function logResults(msg) {
+    resultsEl.textContent = msg;
+  }
+
+  async function initCamera() {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: "user", frameRate: { ideal: FPS } },
+      audio: false
+    });
+    video.srcObject = stream;
+  }
+
+  function captureFrame() {
+    if (!running) return;
+    const w = canvas.width;
+    const h = canvas.height;
+    ctx.drawImage(video, 0, 0, w, h);
+
+    // 中央 32x32 を ROI として使用（頬〜鼻あたりを想定）
+    const size = 32;
+    const sx = Math.floor(w / 2 - size / 2);
+    const sy = Math.floor(h / 2 - size / 2);
+    const img = ctx.getImageData(sx, sy, size, size).data;
+
+    let r = 0, g = 0, b = 0, c = 0;
+    for (let i = 0; i < img.length; i += 4) {
+      r += img[i];
+      g += img[i + 1];
+      b += img[i + 2];
+      c++;
+    }
+    rgbSeries.push([r / c, g / c, b / c]);
+  }
+
+  function mean(arr) {
+    return arr.reduce((a, b) => a + b, 0) / arr.length;
+  }
+
+  function std(arr) {
+    const m = mean(arr);
+    const v = arr.reduce((s, x) => s + (x - m) * (x - m), 0) / arr.length;
+    return Math.sqrt(v);
+  }
+
+  // 簡易バンドパス：DC除去＋移動平均で平滑
+  function detrendAndSmooth(sig, win = 5) {
+    const n = sig.length;
+    const m = mean(sig);
+    const x = sig.map(v => v - m);
+    const y = [];
+    for (let i = 0; i < n; i++) {
+      let s = 0, c = 0;
+      for (let k = -win; k <= win; k++) {
+        const j = i + k;
+        if (j >= 0 && j < n) {
+          s += x[j];
+          c++;
+        }
+      }
+      y.push(s / c);
+    }
+    return y;
+  }
+
+  // POS 法で1ch信号に変換
+  function pos(rgbSeries) {
+    const n = rgbSeries.length;
+    const r = rgbSeries.map(v => v[0]);
+    const g = rgbSeries.map(v => v[1]);
+    const b = rgbSeries.map(v => v[2]);
+
+    const mr = mean(r), mg = mean(g), mb = mean(b);
+    const X = [], Y = [];
+    for (let i = 0; i < n; i++) {
+      const nr = r[i] / mr;
+      const ng = g[i] / mg;
+      const nb = b[i] / mb;
+      X.push(ng - nb);
+      Y.push(-2 * nr + ng + nb);
+    }
+    const stdX = std(X), stdY = std(Y);
+    const alpha = stdY !== 0 ? stdX / stdY : 0;
+    const s = [];
+    for (let i = 0; i < n; i++) s.push(X[i] + alpha * Y[i]);
+    return detrendAndSmooth(s, 3);
+  }
+
+  // FFT で HR と SNR を推定
+  function fftHR(signal, fps) {
+    const n = signal.length;
+    const re = new Array(n).fill(0);
+    const im = new Array(n).fill(0);
+
+    for (let k = 0; k < n; k++) {
+      let sumRe = 0, sumIm = 0;
+      for (let t = 0; t < n; t++) {
+        const angle = -2 * Math.PI * k * t / n;
+        sumRe += signal[t] * Math.cos(angle);
+        sumIm += signal[t] * Math.sin(angle);
+      }
+      re[k] = sumRe;
+      im[k] = sumIm;
+    }
+
+    const mag = [];
+    for (let k = 0; k < n / 2; k++) {
+      mag.push(Math.sqrt(re[k] * re[k] + im[k] * im[k]));
+    }
+
+    const df = fps / n;
+    const minHz = 0.7, maxHz = 4.0;
+    const minIndex = Math.max(1, Math.floor(minHz / df));
+    const maxIndex = Math.min(mag.length - 1, Math.floor(maxHz / df));
+
+    let maxVal = -1, maxIdx = minIndex;
+    let sum = 0;
+    for (let k = minIndex; k <= maxIndex; k++) {
+      const v = mag[k];
+      if (v > maxVal) { maxVal = v; maxIdx = k; }
+      sum += v;
+    }
+    const peakFreq = maxIdx * df;
+    const hr = peakFreq * 60;
+    const noiseMean = sum / (maxIndex - minIndex + 1);
+    const snr = 10 * Math.log10((maxVal + 1e-6) / (noiseMean + 1e-6));
+    return { hr, snr };
+  }
+
+  // 簡易 HRV（RMSSD もどき）：ピーク間隔から推定（粗いが PoC 用）
+  function estimateHRV(signal, fps) {
+    // 雑なピーク検出（ローカル最大）
+    const peaks = [];
+    for (let i = 1; i < signal.length - 1; i++) {
+      if (signal[i] > signal[i - 1] && signal[i] > signal[i + 1]) {
+        peaks.push(i);
+      }
+    }
+    if (peaks.length < 3) return null;
+    const rr = [];
+    for (let i = 0; i < peaks.length - 1; i++) {
+      const dt = (peaks[i + 1] - peaks[i]) / fps; // 秒
+      rr.push(dt);
+    }
+    if (rr.length < 2) return null;
+    const diff2 = [];
+    for (let i = 0; i < rr.length - 1; i++) {
+      const d = rr[i + 1] - rr[i];
+      diff2.push(d * d);
+    }
+    const rmssd = Math.sqrt(mean(diff2)) * 1000; // ms に換算
+    return rmssd;
+  }
+
+  // 疲労スコア（0〜100）
+  function fatigueScore(hr, snr, rmssd) {
+    // 正常域をざっくり定義
+    const hrNorm = Math.max(0, Math.min(1, (hr - 50) / 50));      // 50〜100bpm
+    const snrNorm = Math.max(0, Math.min(1, snr / 10));           // 0〜10dB
+    const rmssdNorm = rmssd ? Math.max(0, Math.min(1, rmssd / 80)) : 0.5; // 0〜80ms
+
+    // 疲労度（1=疲労大）を構成
+    const fatigue =
+      hrNorm * 0.3 +          // HR 高いほど疲労
+      (1 - snrNorm) * 0.2 +   // SNR 低いほど疲労
+      (1 - rmssdNorm) * 0.5;  // HRV 低いほど疲労（重み大）
+
+    const score = Math.round((1 - fatigue) * 100); // 0〜100（高いほど元気）
+    return Math.max(0, Math.min(100, score));
+  }
+
+  async function startMeasurement() {
+    if (running) return;
+    running = true;
+    rgbSeries = [];
+    fatigueEl.textContent = "--";
+    logResults("");
+    logStatus("カメラ起動中… 顔を中央に合わせてください。");
+    startBtn.disabled = true;
+
+    try {
+      await initCamera();
+    } catch (e) {
+      logStatus("カメラが使えません（設定で Safari のカメラ許可を確認）。");
+      running = false;
+      startBtn.disabled = false;
+      return;
+    }
+
+    logStatus("測定中… 30秒間、できるだけ動かないでください。");
+    const interval = setInterval(captureFrame, 1000 / FPS);
+
+    setTimeout(() => {
+      running = false;
+      clearInterval(interval);
+      logStatus("解析中…");
+
+      if (rgbSeries.length < FPS * 10) {
+        logStatus("データ不足（10秒未満）。もう一度測定してください。");
+        startBtn.disabled = false;
+        return;
+      }
+
+      const sig = pos(rgbSeries);
+      const { hr, snr } = fftHR(sig, FPS);
+      const rmssd = estimateHRV(sig, FPS);
+      const score = fatigueScore(hr, snr, rmssd);
+
+      fatigueEl.textContent = score.toString();
+      let txt = "";
+      txt += `推定HR: ${hr.toFixed(1)} bpm\n`;
+      txt += `SNR: ${snr.toFixed(1)} dB\n`;
+      if (rmssd) txt += `簡易HRV(RMSSD): ${rmssd.toFixed(1)} ms\n`;
+      else txt += `簡易HRV(RMSSD): 推定不可（ピーク不足）\n`;
+      txt += `※参考値（医療用途では使用不可）`;
+      logResults(txt);
+      logStatus("測定完了。もう一度測る場合は「測定開始」を押してください。");
+      startBtn.disabled = false;
+    }, DURATION_SEC * 1000);
+  }
+
+  startBtn.addEventListener('click', () => {
+    if (!running) startMeasurement();
+  });
+
+  // PWA 用 service worker 登録
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('service-worker.js').catch(() => {});
+    });
+  }
+</script>
+</body>
+</html>
