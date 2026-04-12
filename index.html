@@ -6,6 +6,10 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <link rel="manifest" href="manifest.json">
   <meta name="theme-color" content="#111111">
+
+  <!-- MediaPipe Tasks Vision（ローカル読み込み推奨） -->
+  <script defer src="./vision_bundle.js"></script>
+
   <style>
     body { margin:0; font-family: system-ui, sans-serif; background:#111; color:#eee; text-align:center; }
     header { padding:10px 0; background:#181818; font-size:18px; font-weight:bold; }
@@ -43,6 +47,16 @@
       background: #1e88e5;
       transition: width 0.2s linear;
     }
+
+    /* 顔枠（楕円） */
+    #guide {
+      position:absolute;
+      border:2px solid rgba(0,200,255,0.7);
+      border-radius:50%;
+      pointer-events:none;
+      display:none;
+    }
+
     canvas { display:none; }
   </style>
 </head>
@@ -54,21 +68,7 @@
 
   <div style="position:relative; display:inline-block;">
     <video id="video" autoplay playsinline></video>
-
-    <!-- 顔位置ガイド（半透明の枠） -->
-    <div id="guide"
-      style="
-        position:absolute;
-        top:20%;
-        left:50%;
-        transform:translateX(-50%);
-        width:60%;
-        height:40%;
-        border:2px solid rgba(0,200,255,0.6);
-        border-radius:10px;
-        pointer-events:none;
-      ">
-    </div>
+    <div id="guide"></div>
   </div>
 
   <canvas id="canvas" width="240" height="180"></canvas>
@@ -99,13 +99,27 @@
   const levelEl = document.getElementById('level');
   const progressBar = document.getElementById('progressBar');
   const progressFill = document.getElementById('progressFill');
+  const guide = document.getElementById('guide');
 
   let rgbSeries = [];
   let eyeSeries = [];
   let running = false;
 
+  let faceDetector = null;
+
   function logStatus(msg) { statusEl.textContent = msg; }
   function logResults(msg) { resultsEl.textContent = msg; }
+
+  async function initFaceDetector() {
+    const { FaceDetector, FilesetResolver } = vision;
+    const resolver = await FilesetResolver.forVisionTasks("./wasm/");
+    faceDetector = await FaceDetector.createFromOptions(resolver, {
+      baseOptions: {
+        modelAssetPath: "./wasm/face_detection_short_range.tflite"
+      },
+      runningMode: "VIDEO"
+    });
+  }
 
   async function initCamera() {
     const stream = await navigator.mediaDevices.getUserMedia({
@@ -121,8 +135,34 @@
     canvas.height = video.videoHeight || 180;
   }
 
+  function drawFaceGuide(box) {
+    guide.style.display = "block";
+
+    const vw = video.clientWidth;
+    const vh = video.clientHeight;
+
+    const x = box.xCenter * vw;
+    const y = box.yCenter * vh;
+    const w = box.width * vw;
+    const h = box.height * vh;
+
+    guide.style.width = `${w}px`;
+    guide.style.height = `${h}px`;
+    guide.style.left = `${x - w / 2}px`;
+    guide.style.top = `${y - h / 2}px`;
+  }
+
+  async function detectFace() {
+    if (!faceDetector) return null;
+    const now = performance.now();
+    const result = faceDetector.detectForVideo(video, now);
+    if (!result.detections || result.detections.length === 0) return null;
+    return result.detections[0].boundingBox;
+  }
+
   function captureFrame() {
     if (!running) return;
+
     const w = canvas.width;
     const h = canvas.height;
     ctx.drawImage(video, 0, 0, w, h);
@@ -142,7 +182,7 @@
     }
     rgbSeries.push([r / c, g / c, b / c]);
 
-    // 目の開き指標（上側と下側の明るさ差）
+    // 目の開き（上側と下側の明るさ差）
     const eyeH = Math.floor(h * 0.25);
     const topImg = ctx.getImageData(sx, Math.max(0, sy - eyeH), size, eyeH).data;
     const bottomImg = ctx.getImageData(sx, sy, size, eyeH).data;
@@ -157,11 +197,13 @@
       bC++;
     }
 
-    const topMean = tSum / tC;
-    const bottomMean = bSum / bC;
-    const eyeOpen = bottomMean - topMean; // 目が細いと差が小さくなる
-
+    const eyeOpen = (bSum / bC) - (tSum / tC);
     eyeSeries.push(eyeOpen);
+
+    // 顔枠更新
+    detectFace().then(box => {
+      if (box) drawFaceGuide(box);
+    });
   }
 
   function mean(arr) { return arr.reduce((a,b)=>a+b,0)/arr.length; }
@@ -262,29 +304,28 @@
     return Math.sqrt(mean(diff2))*1000;
   }
 
-  function fatigueScore(hr, snr, rmssd, eyeOpen) {
-  const hrNorm = Math.max(0, Math.min(1, (hr - 50) / 50));
-  const snrNorm = Math.max(0, Math.min(1, snr / 10));
-  const rmssdNorm = rmssd ? Math.max(0, Math.min(1, rmssd / 80)) : 0.5;
+  function fatigueScore(hr,snr,rmssd,eyeOpen){
+    const hrNorm=Math.max(0,Math.min(1,(hr-50)/50));
+    const snrNorm=Math.max(0,Math.min(1,snr/10));
+    const rmssdNorm=rmssd?Math.max(0,Math.min(1,rmssd/80)):0.5;
 
-  // 眠気の影響を強めるために正規化レンジを少し狭める（方法②）
-  let eyeNorm = 0.5;
-  if (eyeOpen != null) {
-    eyeNorm = Math.max(0, Math.min(1, (eyeOpen - 5) / 45));
+    // 眠気の影響を強める（正規化レンジを狭める）
+    let eyeNorm = 0.5;
+    if (eyeOpen != null) {
+      eyeNorm = Math.max(0, Math.min(1, (eyeOpen - 5) / 45));
+    }
+    const eyeFatigue = 1 - eyeNorm;
+
+    // 眠気の重みを 0.25 にアップ
+    const fatigue =
+      hrNorm * 0.25 +
+      (1 - snrNorm) * 0.25 +
+      (1 - rmssdNorm) * 0.25 +
+      eyeFatigue * 0.25;
+
+    const score=Math.round((1-fatigue)*100);
+    return Math.max(0,Math.min(100,score));
   }
-
-  const eyeFatigue = 1 - eyeNorm;
-
-  // 眠気の重みを 0.25 にアップ（方法①）
-  const fatigue =
-    hrNorm * 0.25 +
-    (1 - snrNorm) * 0.25 +
-    (1 - rmssdNorm) * 0.25 +
-    eyeFatigue * 0.25;
-
-  const score = Math.round((1 - fatigue) * 100);
-  return Math.max(0, Math.min(100, score));
-}
 
   function fatigueLevel(score){
     if(score>=80) return "レベル1：元気";
@@ -307,8 +348,9 @@
 
     try{
       await initCamera();
+      await initFaceDetector();
     }catch(e){
-      logStatus("カメラが使えません（設定で Safari のカメラ許可を確認）。");
+      logStatus("カメラまたは顔検出が使えません。Safari の設定を確認してください。");
       running=false;
       startBtn.disabled=false;
       return;
@@ -344,12 +386,14 @@
       const sig=pos(rgbSeries);
       const {hr,snr}=fftHR(sig,FPS);
       const rmssd=estimateHRV(sig,FPS);
-      // 目の開き指標を平滑化（方法③）
-let eyeOpen = null;
-if (eyeSeries.length) {
-  const eyeSmooth = detrendAndSmooth(eyeSeries, 8); // 平滑化
-  eyeOpen = mean(eyeSmooth); // 平均値
-}
+
+      // 目の開き指標を平滑化
+      let eyeOpen = null;
+      if (eyeSeries.length) {
+        const eyeSmooth = detrendAndSmooth(eyeSeries, 8);
+        eyeOpen = mean(eyeSmooth);
+      }
+
       const score=fatigueScore(hr,snr,rmssd,eyeOpen);
       const level=fatigueLevel(score);
 
@@ -380,7 +424,5 @@ if (eyeSeries.length) {
     });
   }
 </script>
-</body>
-</html>
 </body>
 </html>
