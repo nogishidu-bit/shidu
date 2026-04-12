@@ -262,24 +262,30 @@
     return Math.sqrt(mean(diff2))*1000;
   }
 
-  function fatigueScore(hr,snr,rmssd,eyeOpen){
-    const hrNorm=Math.max(0,Math.min(1,(hr-50)/50));
-    const snrNorm=Math.max(0,Math.min(1,snr/10));
-    const rmssdNorm=rmssd?Math.max(0,Math.min(1,rmssd/80)):0.5;
+  function fatigueScore(hr, snr, rmssd, eyeOpen) {
+  const hrNorm = Math.max(0, Math.min(1, (hr - 50) / 50));
+  const snrNorm = Math.max(0, Math.min(1, snr / 10));
+  const rmssdNorm = rmssd ? Math.max(0, Math.min(1, rmssd / 80)) : 0.5;
 
-    // 目の開き（差分）を 0〜1 に正規化
-    const eyeNorm=Math.max(0,Math.min(1,(eyeOpen-5)/40)); // だいたい 5〜45 を想定
-    const eyeFatigue=1-eyeNorm;
-
-    const fatigue=
-      hrNorm*0.2 +
-      (1-snrNorm)*0.2 +
-      (1-rmssdNorm)*0.3 +
-      eyeFatigue*0.3;
-
-    const score=Math.round((1-fatigue)*100);
-    return Math.max(0,Math.min(100,score));
+  // 方法②：目の開きの正規化レンジを広げて自然に
+  // だいたい 5〜60 の範囲を想定
+  let eyeNorm = 0.5;
+  if (eyeOpen != null) {
+    eyeNorm = Math.max(0, Math.min(1, (eyeOpen - 5) / 60));
   }
+
+  const eyeFatigue = 1 - eyeNorm;
+
+  // 方法①：重みを自然なバランスに調整
+  const fatigue =
+    hrNorm * 0.25 +
+    (1 - snrNorm) * 0.25 +
+    (1 - rmssdNorm) * 0.35 +
+    eyeFatigue * 0.15;   // ← ここが最適化ポイント
+
+  const score = Math.round((1 - fatigue) * 100);
+  return Math.max(0, Math.min(100, score));
+}
 
   function fatigueLevel(score){
     if(score>=80) return "レベル1：元気";
@@ -339,8 +345,12 @@
       const sig=pos(rgbSeries);
       const {hr,snr}=fftHR(sig,FPS);
       const rmssd=estimateHRV(sig,FPS);
-      const eyeOpen=eyeSeries.length?mean(eyeSeries):null;
-
+      // 目の開き指標を平滑化（方法③）
+let eyeOpen = null;
+if (eyeSeries.length) {
+  const eyeSmooth = detrendAndSmooth(eyeSeries, 8); // 平滑化
+  eyeOpen = mean(eyeSmooth); // 平均値
+}
       const score=fatigueScore(hr,snr,rmssd,eyeOpen);
       const level=fatigueLevel(score);
 
