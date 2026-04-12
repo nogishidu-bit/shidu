@@ -2,26 +2,30 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8">
-  <title>疲労度チェック rPPG PWA</title>
+  <title>疲労度チェック rPPG（@0.10.34）</title>
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <link rel="manifest" href="manifest.json">
-  <meta name="theme-color" content="#111111">
+  <meta name="theme-color" content="#111">
 
-  <!-- MediaPipe Tasks Vision（ローカル読み込み推奨） -->
-  <script defer src="./vision_bundle.js"></script>
+  <!-- 最新 MediaPipe Tasks Vision 0.10.34 -->
+  <script type="module" src="./vision_bundle.js"></script>
 
   <style>
-    body { margin:0; font-family: system-ui, sans-serif; background:#111; color:#eee; text-align:center; }
-    header { padding:10px 0; background:#181818; font-size:18px; font-weight:bold; }
+    body { margin:0; background:#111; color:#eee; font-family:system-ui; text-align:center; }
+    header { padding:10px; background:#181818; font-size:18px; font-weight:bold; }
     main { padding:10px; }
-    video { width:260px; max-width:80vw; transform:scaleX(-1); border-radius:8px; margin-top:8px; background:#000; }
+
+    video { width:260px; max-width:80vw; transform:scaleX(-1); border-radius:8px; background:#000; }
     #startBtn { padding:10px 20px; font-size:16px; margin:10px 0; border-radius:6px; border:none; background:#1e88e5; color:#fff; }
     #startBtn:disabled { background:#555; }
+
     #status { font-size:13px; color:#ccc; min-height:2em; white-space:pre-line; margin-top:6px; }
+
     #scoreBox { margin-top:10px; padding:10px; border-radius:8px; background:#222; display:inline-block; min-width:220px; text-align:left; }
     .label { color:#aaa; font-size:12px; }
     .value { font-size:22px; font-weight:bold; margin:4px 0; }
     #level { font-size:14px; margin-bottom:6px; }
+
     #results {
       margin-top: 8px;
       font-size: 13px;
@@ -32,6 +36,7 @@
       padding: 8px;
       border-radius: 6px;
     }
+
     #progressBar {
       width: 260px;
       height: 8px;
@@ -61,13 +66,14 @@
   </style>
 </head>
 <body>
-<header>疲労度チェック rPPG（iPhone SE3）</header>
+<header>疲労度チェック rPPG（@0.10.34）</header>
+
 <main>
-  <p>顔を画面中央に合わせて、30秒じっとしてください。</p>
+  <p>顔を中央に合わせて、30秒じっとしてください。</p>
   <button id="startBtn">測定開始</button><br>
 
   <div style="position:relative; display:inline-block;">
-    <video id="video" autoplay playsinline></video>
+    <video id="video" autoplay playsinline muted></video>
     <div id="guide"></div>
   </div>
 
@@ -85,7 +91,9 @@
   </div>
 </main>
 
-<script>
+<script type="module">
+  import { FaceDetector, FilesetResolver } from "./vision_bundle.js";
+
   const FPS = 30;
   const DURATION_SEC = 30;
 
@@ -104,38 +112,34 @@
   let rgbSeries = [];
   let eyeSeries = [];
   let running = false;
-
   let faceDetector = null;
 
-  function logStatus(msg) { statusEl.textContent = msg; }
-  function logResults(msg) { resultsEl.textContent = msg; }
+  function logStatus(msg){ statusEl.textContent = msg; }
+  function logResults(msg){ resultsEl.textContent = msg; }
 
-  async function initFaceDetector() {
-    const { FaceDetector, FilesetResolver } = vision;
+  async function initFaceDetector(){
     const resolver = await FilesetResolver.forVisionTasks("./wasm/");
     faceDetector = await FaceDetector.createFromOptions(resolver, {
       baseOptions: {
-        modelAssetPath: "./wasm/face_detection_short_range.tflite"
+        modelAssetPath: "./wasm/face_detector.task"
       },
       runningMode: "VIDEO"
     });
   }
 
-  async function initCamera() {
+  async function initCamera(){
     const stream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: "user", width: 240, height: 180, frameRate: { ideal: FPS } },
-      audio: false
+      video: { facingMode:"user", width:240, height:180, frameRate:{ideal:FPS} },
+      audio:false
     });
     video.srcObject = stream;
-    video.muted = true;
-    video.setAttribute("playsinline", "");
     await video.play();
 
     canvas.width = video.videoWidth || 240;
     canvas.height = video.videoHeight || 180;
   }
 
-  function drawFaceGuide(box) {
+  function drawFaceGuide(box){
     guide.style.display = "block";
 
     const vw = video.clientWidth;
@@ -148,78 +152,62 @@
 
     guide.style.width = `${w}px`;
     guide.style.height = `${h}px`;
-    guide.style.left = `${x - w / 2}px`;
-    guide.style.top = `${y - h / 2}px`;
+    guide.style.left = `${x - w/2}px`;
+    guide.style.top = `${y - h/2}px`;
   }
 
-  async function detectFace() {
-    if (!faceDetector) return null;
+  async function detectFace(){
+    if(!faceDetector) return null;
     const now = performance.now();
-    const result = faceDetector.detectForVideo(video, now);
-    if (!result.detections || result.detections.length === 0) return null;
+    const result = await faceDetector.detectForVideo(video, now);
+    if(!result.detections || result.detections.length === 0) return null;
     return result.detections[0].boundingBox;
   }
 
-  function captureFrame() {
-    if (!running) return;
+  function captureFrame(){
+    if(!running) return;
 
     const w = canvas.width;
     const h = canvas.height;
     ctx.drawImage(video, 0, 0, w, h);
 
-    // rPPG ROI（中央 32x32）
+    // rPPG ROI
     const size = 32;
-    const sx = Math.floor(w / 2 - size / 2);
-    const sy = Math.floor(h / 2 - size / 2);
+    const sx = Math.floor(w/2 - size/2);
+    const sy = Math.floor(h/2 - size/2);
     const img = ctx.getImageData(sx, sy, size, size).data;
 
-    let r = 0, g = 0, b = 0, c = 0;
-    for (let i = 0; i < img.length; i += 4) {
-      r += img[i];
-      g += img[i + 1];
-      b += img[i + 2];
-      c++;
+    let r=0,g=0,b=0,c=0;
+    for(let i=0;i<img.length;i+=4){
+      r+=img[i]; g+=img[i+1]; b+=img[i+2]; c++;
     }
-    rgbSeries.push([r / c, g / c, b / c]);
+    rgbSeries.push([r/c, g/c, b/c]);
 
-    // 目の開き（上側と下側の明るさ差）
-    const eyeH = Math.floor(h * 0.25);
-    const topImg = ctx.getImageData(sx, Math.max(0, sy - eyeH), size, eyeH).data;
+    // 目の開き
+    const eyeH = Math.floor(h*0.25);
+    const topImg = ctx.getImageData(sx, Math.max(0, sy-eyeH), size, eyeH).data;
     const bottomImg = ctx.getImageData(sx, sy, size, eyeH).data;
 
-    let tSum = 0, bSum = 0, tC = 0, bC = 0;
-    for (let i = 0; i < topImg.length; i += 4) {
-      tSum += (topImg[i] + topImg[i+1] + topImg[i+2]) / 3;
-      tC++;
-    }
-    for (let i = 0; i < bottomImg.length; i += 4) {
-      bSum += (bottomImg[i] + bottomImg[i+1] + bottomImg[i+2]) / 3;
-      bC++;
-    }
+    let tSum=0,bSum=0,tC=0,bC=0;
+    for(let i=0;i<topImg.length;i+=4){ tSum+=(topImg[i]+topImg[i+1]+topImg[i+2])/3; tC++; }
+    for(let i=0;i<bottomImg.length;i+=4){ bSum+=(bottomImg[i]+bottomImg[i+1]+bottomImg[i+2])/3; bC++; }
 
-    const eyeOpen = (bSum / bC) - (tSum / tC);
-    eyeSeries.push(eyeOpen);
+    eyeSeries.push((bSum/bC)-(tSum/tC));
 
-    // 顔枠更新
-    detectFace().then(box => {
-      if (box) drawFaceGuide(box);
-    });
+    detectFace().then(box => { if(box) drawFaceGuide(box); });
   }
 
-  function mean(arr) { return arr.reduce((a,b)=>a+b,0)/arr.length; }
-  function std(arr) {
-    const m = mean(arr);
-    return Math.sqrt(arr.reduce((s,x)=>s+(x-m)*(x-m),0)/arr.length);
-  }
+  function mean(a){ return a.reduce((x,y)=>x+y,0)/a.length; }
+  function std(a){ const m=mean(a); return Math.sqrt(a.reduce((s,x)=>s+(x-m)*(x-m),0)/a.length); }
 
-  function detrendAndSmooth(sig, win=5) {
-    const n = sig.length;
-    const m = mean(sig);
-    const x = sig.map(v=>v-m);
-    const y = [];
-    for (let i=0;i<n;i++){
+  function detrendAndSmooth(sig,win=5){
+    const n=sig.length;
+    const m=mean(sig);
+    const x=sig.map(v=>v-m);
+    const y=[];
+    for(let i=0;i<n;i++){
       let s=0,c=0;
-      for (let k=-win;k<=win;k++){
+      for(let k=-win;k<=win;k++){
         const j=i+k;
         if(j>=0 && j<n){ s+=x[j]; c++; }
       }
@@ -228,22 +216,21 @@
     return y;
   }
 
-  function pos(rgbSeries) {
-    const n = rgbSeries.length;
-    const r = rgbSeries.map(v=>v[0]);
-    const g = rgbSeries.map(v=>v[1]);
-    const b = rgbSeries.map(v=>v[2]);
+  function pos(rgb){
+    const n=rgb.length;
+    const r=rgb.map(v=>v[0]);
+    const g=rgb.map(v=>v[1]);
+    const b=rgb.map(v=>v[2]);
 
     const mr=mean(r), mg=mean(g), mb=mean(b);
-    const X=[], Y=[];
+    const X=[],Y=[];
     for(let i=0;i<n;i++){
       const nr=r[i]/mr, ng=g[i]/mg, nb=b[i]/mb;
       X.push(ng-nb);
       Y.push(-2*nr+ng+nb);
     }
     const alpha = std(Y)!==0 ? std(X)/std(Y) : 0;
-    const s = X.map((v,i)=>v+alpha*Y[i]);
-    return detrendAndSmooth(s,3);
+    return detrendAndSmooth(X.map((v,i)=>v+alpha*Y[i]),3);
   }
 
   function fftHR(signal,fps){
@@ -252,7 +239,7 @@
     const im=new Array(n).fill(0);
 
     for(let k=0;k<n;k++){
-      let sr=0, si=0;
+      let sr=0,si=0;
       for(let t=0;t<n;t++){
         const ang=-2*Math.PI*k*t/n;
         sr+=signal[t]*Math.cos(ang);
@@ -271,17 +258,17 @@
     const minIndex=Math.max(1,Math.floor(minHz/df));
     const maxIndex=Math.min(mag.length-1,Math.floor(maxHz/df));
 
-    let maxVal=-1, maxIdx=minIndex, sum=0;
+    let maxVal=-1,maxIdx=minIndex,sum=0;
     for(let k=minIndex;k<=maxIndex;k++){
       const v=mag[k];
       if(v>maxVal){ maxVal=v; maxIdx=k; }
       sum+=v;
     }
 
-    const hr=(maxIdx*df)*60;
-    const noise=sum/(maxIndex-minIndex+1);
-    const snr=10*Math.log10((maxVal+1e-6)/(noise+1e-6));
-    return {hr,snr};
+    return {
+      hr:(maxIdx*df)*60,
+      snr:10*Math.log10((maxVal+1e-6)/(sum/(maxIndex-minIndex+1)+1e-6))
+    };
   }
 
   function estimateHRV(signal,fps){
@@ -309,22 +296,19 @@
     const snrNorm=Math.max(0,Math.min(1,snr/10));
     const rmssdNorm=rmssd?Math.max(0,Math.min(1,rmssd/80)):0.5;
 
-    // 眠気の影響を強める（正規化レンジを狭める）
     let eyeNorm = 0.5;
-    if (eyeOpen != null) {
-      eyeNorm = Math.max(0, Math.min(1, (eyeOpen - 5) / 45));
+    if(eyeOpen!=null){
+      eyeNorm = Math.max(0,Math.min(1,(eyeOpen-5)/45));
     }
-    const eyeFatigue = 1 - eyeNorm;
+    const eyeFatigue = 1-eyeNorm;
 
-    // 眠気の重みを 0.25 にアップ
     const fatigue =
-      hrNorm * 0.25 +
-      (1 - snrNorm) * 0.25 +
-      (1 - rmssdNorm) * 0.25 +
-      eyeFatigue * 0.25;
+      hrNorm*0.25 +
+      (1-snrNorm)*0.25 +
+      (1-rmssdNorm)*0.25 +
+      eyeFatigue*0.25;
 
-    const score=Math.round((1-fatigue)*100);
-    return Math.max(0,Math.min(100,score));
+    return Math.max(0,Math.min(100,Math.round((1-fatigue)*100)));
   }
 
   function fatigueLevel(score){
@@ -338,6 +322,7 @@
   async function startMeasurement(){
     if(running) return;
     running=true;
+
     rgbSeries=[];
     eyeSeries=[];
     fatigueEl.textContent="--";
@@ -365,8 +350,7 @@
     let elapsed=0;
     const progressTimer=setInterval(()=>{
       elapsed++;
-      const ratio=elapsed/(DURATION_SEC*FPS);
-      progressFill.style.width=(ratio*100)+"%";
+      progressFill.style.width = (elapsed/(DURATION_SEC*FPS))*100 + "%";
     },1000/FPS);
 
     setTimeout(()=>{
@@ -377,46 +361,42 @@
 
       logStatus("解析中…");
 
-      if(rgbSeries.length<FPS*10){
+      if(rgbSeries.length < FPS*10){
         logStatus("データ不足（10秒未満）。もう一度測定してください。");
         startBtn.disabled=false;
         return;
       }
 
-      const sig=pos(rgbSeries);
-      const {hr,snr}=fftHR(sig,FPS);
-      const rmssd=estimateHRV(sig,FPS);
+      const sig = pos(rgbSeries);
+      const {hr,snr} = fftHR(sig,FPS);
+      const rmssd = estimateHRV(sig,FPS);
 
-      // 目の開き指標を平滑化
       let eyeOpen = null;
-      if (eyeSeries.length) {
-        const eyeSmooth = detrendAndSmooth(eyeSeries, 8);
-        eyeOpen = mean(eyeSmooth);
+      if(eyeSeries.length){
+        eyeOpen = mean(detrendAndSmooth(eyeSeries,8));
       }
 
-      const score=fatigueScore(hr,snr,rmssd,eyeOpen);
-      const level=fatigueLevel(score);
+      const score = fatigueScore(hr,snr,rmssd,eyeOpen);
+      const level = fatigueLevel(score);
 
-      fatigueEl.textContent=score;
-      levelEl.textContent=`疲労レベル：${level}`;
+      fatigueEl.textContent = score;
+      levelEl.textContent = `疲労レベル：${level}`;
 
       let txt="";
       txt+=`推定HR: ${hr.toFixed(1)} bpm\n`;
       txt+=`SNR: ${snr.toFixed(1)} dB\n`;
-      if(rmssd) txt+=`簡易HRV(RMSSD): ${rmssd.toFixed(1)} ms\n`;
-      else txt+=`簡易HRV(RMSSD): 推定不可（ピーク不足）\n`;
+      txt+= rmssd ? `簡易HRV(RMSSD): ${rmssd.toFixed(1)} ms\n` : `簡易HRV(RMSSD): 推定不可\n`;
       if(eyeOpen!=null) txt+=`目の開き指標: ${eyeOpen.toFixed(1)}（小さいほど眠気）\n`;
       txt+=`※参考値（医療用途では使用不可）`;
       logResults(txt);
 
       logStatus("測定完了。もう一度測る場合は「測定開始」を押してください。");
       startBtn.disabled=false;
+
     },DURATION_SEC*1000);
   }
 
-  startBtn.addEventListener('click',()=>{
-    if(!running) startMeasurement();
-  });
+  startBtn.addEventListener('click',()=>{ if(!running) startMeasurement(); });
 
   if('serviceWorker' in navigator){
     window.addEventListener('load',()=>{
