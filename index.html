@@ -7,12 +7,12 @@
   <link rel="manifest" href="manifest.json">
   <meta name="theme-color" content="#111">
 
-  <!-- 最新 MediaPipe Tasks Vision 0.10.34 -->
- <script type="module">
-  import * as vision from "./vision_bundle.cjs";
-  window.vision = vision;
-</script>
-
+  <!-- MediaPipe Tasks Vision 0.10.34 -->
+  <script type="module">
+    import * as vision from "./vision_bundle.cjs";
+    const { FaceDetector, FilesetResolver } = vision;
+    window.vision = vision;
+  </script>
 
   <style>
     body { margin:0; background:#111; color:#eee; font-family:system-ui; text-align:center; }
@@ -57,7 +57,6 @@
       transition: width 0.2s linear;
     }
 
-    /* 顔枠（楕円） */
     #guide {
       position:absolute;
       border:2px solid rgba(0,200,255,0.7);
@@ -96,11 +95,7 @@
 </main>
 
 <script type="module">
-  import * as vision from "./vision_bundle.cjs";
-  const { FaceDetector, FilesetResolver } = vision;
-  window.vision = vision;
-</script>
-
+  const { FaceDetector, FilesetResolver } = window.vision;
 
   const FPS = 30;
   const DURATION_SEC = 30;
@@ -179,7 +174,6 @@
     const h = canvas.height;
     ctx.drawImage(video, 0, 0, w, h);
 
-    // rPPG ROI
     const size = 32;
     const sx = Math.floor(w/2 - size/2);
     const sy = Math.floor(h/2 - size/2);
@@ -191,7 +185,6 @@
     }
     rgbSeries.push([r/c, g/c, b/c]);
 
-    // 目の開き
     const eyeH = Math.floor(h*0.25);
     const topImg = ctx.getImageData(sx, Math.max(0, sy-eyeH), size, eyeH).data;
     const bottomImg = ctx.getImageData(sx, sy, size, eyeH).data;
@@ -367,50 +360,29 @@
       clearInterval(progressTimer);
       progressBar.style.display="none";
 
-      logStatus("解析中…");
+      const rgb = pos(rgbSeries);
+      const hrInfo = fftHR(rgb, FPS);
+      const rmssd = estimateHRV(rgb, FPS);
+      const eyeOpen = mean(eyeSeries);
 
-      if(rgbSeries.length < FPS*10){
-        logStatus("データ不足（10秒未満）。もう一度測定してください。");
-        startBtn.disabled=false;
-        return;
-      }
-
-      const sig = pos(rgbSeries);
-      const {hr,snr} = fftHR(sig,FPS);
-      const rmssd = estimateHRV(sig,FPS);
-
-      let eyeOpen = null;
-      if(eyeSeries.length){
-        eyeOpen = mean(detrendAndSmooth(eyeSeries,8));
-      }
-
-      const score = fatigueScore(hr,snr,rmssd,eyeOpen);
-      const level = fatigueLevel(score);
-
+      const score = fatigueScore(hrInfo.hr, hrInfo.snr, rmssd, eyeOpen);
       fatigueEl.textContent = score;
-      levelEl.textContent = `疲労レベル：${level}`;
+      levelEl.textContent = "疲労レベル：" + fatigueLevel(score);
 
-      let txt="";
-      txt+=`推定HR: ${hr.toFixed(1)} bpm\n`;
-      txt+=`SNR: ${snr.toFixed(1)} dB\n`;
-      txt+= rmssd ? `簡易HRV(RMSSD): ${rmssd.toFixed(1)} ms\n` : `簡易HRV(RMSSD): 推定不可\n`;
-      if(eyeOpen!=null) txt+=`目の開き指標: ${eyeOpen.toFixed(1)}（小さいほど眠気）\n`;
-      txt+=`※参考値（医療用途では使用不可）`;
-      logResults(txt);
+      logResults(
+        `HR: ${hrInfo.hr.toFixed(1)} bpm\n` +
+        `SNR: ${hrInfo.snr.toFixed(2)} dB\n` +
+        `RMSSD: ${rmssd?rmssd.toFixed(1):"--"} ms\n` +
+        `EyeOpen: ${eyeOpen.toFixed(1)}`
+      );
 
-      logStatus("測定完了。もう一度測る場合は「測定開始」を押してください。");
       startBtn.disabled=false;
-
-    },DURATION_SEC*1000);
+      logStatus("測定完了");
+    }, DURATION_SEC*1000);
   }
 
-  startBtn.addEventListener('click',()=>{ if(!running) startMeasurement(); });
-
-  if('serviceWorker' in navigator){
-    window.addEventListener('load',()=>{
-      navigator.serviceWorker.register('service-worker.js').catch(()=>{});
-    });
-  }
+  startBtn.addEventListener("click", startMeasurement);
 </script>
+
 </body>
 </html>
