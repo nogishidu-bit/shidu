@@ -8,7 +8,11 @@
   <meta name="theme-color" content="#111">
 
   <!-- 最新 MediaPipe Tasks Vision 0.10.34 -->
-  <script type="module" src="./vision_bundle.js"></script>
+ <script type="module">
+  import * as vision from "./vision_bundle.cjs";
+  window.vision = vision;
+</script>
+
 
   <style>
     body { margin:0; background:#111; color:#eee; font-family:system-ui; text-align:center; }
