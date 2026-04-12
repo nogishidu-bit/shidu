@@ -267,21 +267,20 @@
   const snrNorm = Math.max(0, Math.min(1, snr / 10));
   const rmssdNorm = rmssd ? Math.max(0, Math.min(1, rmssd / 80)) : 0.5;
 
-  // 方法②：目の開きの正規化レンジを広げて自然に
-  // だいたい 5〜60 の範囲を想定
+  // 眠気の影響を強めるために正規化レンジを少し狭める（方法②）
   let eyeNorm = 0.5;
   if (eyeOpen != null) {
-    eyeNorm = Math.max(0, Math.min(1, (eyeOpen - 5) / 60));
+    eyeNorm = Math.max(0, Math.min(1, (eyeOpen - 5) / 45));
   }
 
   const eyeFatigue = 1 - eyeNorm;
 
-  // 方法①：重みを自然なバランスに調整
+  // 眠気の重みを 0.25 にアップ（方法①）
   const fatigue =
     hrNorm * 0.25 +
     (1 - snrNorm) * 0.25 +
-    (1 - rmssdNorm) * 0.35 +
-    eyeFatigue * 0.15;   // ← ここが最適化ポイント
+    (1 - rmssdNorm) * 0.25 +
+    eyeFatigue * 0.25;
 
   const score = Math.round((1 - fatigue) * 100);
   return Math.max(0, Math.min(100, score));
