@@ -28,6 +28,21 @@
       padding: 8px;
       border-radius: 6px;
     }
+    #progressBar {
+      width: 260px;
+      height: 8px;
+      background: #333;
+      border-radius: 4px;
+      margin: 10px auto;
+      overflow: hidden;
+      display:none;
+    }
+    #progressFill {
+      height: 100%;
+      width: 0%;
+      background: #1e88e5;
+      transition: width 0.2s linear;
+    }
     canvas { display:none; }
   </style>
 </head>
@@ -36,8 +51,29 @@
 <main>
   <p>顔を画面中央に合わせて、30秒じっとしてください。</p>
   <button id="startBtn">測定開始</button><br>
-  <video id="video" autoplay playsinline></video>
+
+  <div style="position:relative; display:inline-block;">
+    <video id="video" autoplay playsinline></video>
+
+    <!-- 顔位置ガイド（半透明の枠） -->
+    <div id="guide"
+      style="
+        position:absolute;
+        top:20%;
+        left:50%;
+        transform:translateX(-50%);
+        width:60%;
+        height:40%;
+        border:2px solid rgba(0,200,255,0.6);
+        border-radius:10px;
+        pointer-events:none;
+      ">
+    </div>
+  </div>
+
   <canvas id="canvas" width="240" height="180"></canvas>
+
+  <div id="progressBar"><div id="progressFill"></div></div>
 
   <div id="status"></div>
 
@@ -61,18 +97,15 @@
   const resultsEl = document.getElementById('results');
   const fatigueEl = document.getElementById('fatigueScore');
   const levelEl = document.getElementById('level');
+  const progressBar = document.getElementById('progressBar');
+  const progressFill = document.getElementById('progressFill');
 
   let rgbSeries = [];
-  let eyeSeries = [];   // 目の開き指標（簡易）
+  let eyeSeries = [];
   let running = false;
 
-  function logStatus(msg) {
-    statusEl.textContent = msg;
-  }
-
-  function logResults(msg) {
-    resultsEl.textContent = msg;
-  }
+  function logStatus(msg) { statusEl.textContent = msg; }
+  function logResults(msg) { resultsEl.textContent = msg; }
 
   async function initCamera() {
     const stream = await navigator.mediaDevices.getUserMedia({
@@ -94,7 +127,7 @@
     const h = canvas.height;
     ctx.drawImage(video, 0, 0, w, h);
 
-    // 中央 32x32 を rPPG 用 ROI
+    // rPPG ROI（中央 32x32）
     const size = 32;
     const sx = Math.floor(w / 2 - size / 2);
     const sy = Math.floor(h / 2 - size / 2);
@@ -109,231 +142,236 @@
     }
     rgbSeries.push([r / c, g / c, b / c]);
 
-    // 顔の上側（目あたり）を簡易的に見る：明るさの変動を「目の開き指標」として使う
+    // 目の開き指標（上側と下側の明るさ差）
     const eyeH = Math.floor(h * 0.25);
-    const eyeImg = ctx.getImageData(sx, Math.max(0, sy - eyeH), size, eyeH).data;
-    let eSum = 0, eC = 0;
-    for (let i = 0; i < eyeImg.length; i += 4) {
-      const br = (eyeImg[i] + eyeImg[i + 1] + eyeImg[i + 2]) / 3;
-      eSum += br;
-      eC++;
+    const topImg = ctx.getImageData(sx, Math.max(0, sy - eyeH), size, eyeH).data;
+    const bottomImg = ctx.getImageData(sx, sy, size, eyeH).data;
+
+    let tSum = 0, bSum = 0, tC = 0, bC = 0;
+    for (let i = 0; i < topImg.length; i += 4) {
+      tSum += (topImg[i] + topImg[i+1] + topImg[i+2]) / 3;
+      tC++;
     }
-    const eyeMean = eSum / eC;
-    eyeSeries.push(eyeMean); // 目を細めると暗くなりやすい → 値が下がる
+    for (let i = 0; i < bottomImg.length; i += 4) {
+      bSum += (bottomImg[i] + bottomImg[i+1] + bottomImg[i+2]) / 3;
+      bC++;
+    }
+
+    const topMean = tSum / tC;
+    const bottomMean = bSum / bC;
+    const eyeOpen = bottomMean - topMean; // 目が細いと差が小さくなる
+
+    eyeSeries.push(eyeOpen);
   }
 
-  function mean(arr) {
-    return arr.reduce((a, b) => a + b, 0) / arr.length;
-  }
-
+  function mean(arr) { return arr.reduce((a,b)=>a+b,0)/arr.length; }
   function std(arr) {
     const m = mean(arr);
-    const v = arr.reduce((s, x) => s + (x - m) * (x - m), 0) / arr.length;
-    return Math.sqrt(v);
+    return Math.sqrt(arr.reduce((s,x)=>s+(x-m)*(x-m),0)/arr.length);
   }
 
-  function detrendAndSmooth(sig, win = 5) {
+  function detrendAndSmooth(sig, win=5) {
     const n = sig.length;
     const m = mean(sig);
-    const x = sig.map(v => v - m);
+    const x = sig.map(v=>v-m);
     const y = [];
-    for (let i = 0; i < n; i++) {
-      let s = 0, c = 0;
-      for (let k = -win; k <= win; k++) {
-        const j = i + k;
-        if (j >= 0 && j < n) {
-          s += x[j];
-          c++;
-        }
+    for (let i=0;i<n;i++){
+      let s=0,c=0;
+      for (let k=-win;k<=win;k++){
+        const j=i+k;
+        if(j>=0 && j<n){ s+=x[j]; c++; }
       }
-      y.push(s / c);
+      y.push(s/c);
     }
     return y;
   }
 
-  // POS 法
   function pos(rgbSeries) {
     const n = rgbSeries.length;
-    const r = rgbSeries.map(v => v[0]);
-    const g = rgbSeries.map(v => v[1]);
-    const b = rgbSeries.map(v => v[2]);
+    const r = rgbSeries.map(v=>v[0]);
+    const g = rgbSeries.map(v=>v[1]);
+    const b = rgbSeries.map(v=>v[2]);
 
-    const mr = mean(r), mg = mean(g), mb = mean(b);
-    const X = [], Y = [];
-    for (let i = 0; i < n; i++) {
-      const nr = r[i] / mr;
-      const ng = g[i] / mg;
-      const nb = b[i] / mb;
-      X.push(ng - nb);
-      Y.push(-2 * nr + ng + nb);
+    const mr=mean(r), mg=mean(g), mb=mean(b);
+    const X=[], Y=[];
+    for(let i=0;i<n;i++){
+      const nr=r[i]/mr, ng=g[i]/mg, nb=b[i]/mb;
+      X.push(ng-nb);
+      Y.push(-2*nr+ng+nb);
     }
-    const stdX = std(X), stdY = std(Y);
-    const alpha = stdY !== 0 ? stdX / stdY : 0;
-    const s = [];
-    for (let i = 0; i < n; i++) s.push(X[i] + alpha * Y[i]);
-    return detrendAndSmooth(s, 3);
+    const alpha = std(Y)!==0 ? std(X)/std(Y) : 0;
+    const s = X.map((v,i)=>v+alpha*Y[i]);
+    return detrendAndSmooth(s,3);
   }
 
-  function fftHR(signal, fps) {
-    const n = signal.length;
-    const re = new Array(n).fill(0);
-    const im = new Array(n).fill(0);
+  function fftHR(signal,fps){
+    const n=signal.length;
+    const re=new Array(n).fill(0);
+    const im=new Array(n).fill(0);
 
-    for (let k = 0; k < n; k++) {
-      let sumRe = 0, sumIm = 0;
-      for (let t = 0; t < n; t++) {
-        const angle = -2 * Math.PI * k * t / n;
-        sumRe += signal[t] * Math.cos(angle);
-        sumIm += signal[t] * Math.sin(angle);
+    for(let k=0;k<n;k++){
+      let sr=0, si=0;
+      for(let t=0;t<n;t++){
+        const ang=-2*Math.PI*k*t/n;
+        sr+=signal[t]*Math.cos(ang);
+        si+=signal[t]*Math.sin(ang);
       }
-      re[k] = sumRe;
-      im[k] = sumIm;
+      re[k]=sr; im[k]=si;
     }
 
-    const mag = [];
-    for (let k = 0; k < n / 2; k++) {
-      mag.push(Math.sqrt(re[k] * re[k] + im[k] * im[k]));
+    const mag=[];
+    for(let k=0;k<n/2;k++){
+      mag.push(Math.sqrt(re[k]*re[k]+im[k]*im[k]));
     }
 
-    const df = fps / n;
-    const minHz = 0.7, maxHz = 4.0;
-    const minIndex = Math.max(1, Math.floor(minHz / df));
-    const maxIndex = Math.min(mag.length - 1, Math.floor(maxHz / df));
+    const df=fps/n;
+    const minHz=0.7, maxHz=4.0;
+    const minIndex=Math.max(1,Math.floor(minHz/df));
+    const maxIndex=Math.min(mag.length-1,Math.floor(maxHz/df));
 
-    let maxVal = -1, maxIdx = minIndex;
-    let sum = 0;
-    for (let k = minIndex; k <= maxIndex; k++) {
-      const v = mag[k];
-      if (v > maxVal) { maxVal = v; maxIdx = k; }
-      sum += v;
+    let maxVal=-1, maxIdx=minIndex, sum=0;
+    for(let k=minIndex;k<=maxIndex;k++){
+      const v=mag[k];
+      if(v>maxVal){ maxVal=v; maxIdx=k; }
+      sum+=v;
     }
-    const peakFreq = maxIdx * df;
-    const hr = peakFreq * 60;
-    const noiseMean = sum / (maxIndex - minIndex + 1);
-    const snr = 10 * Math.log10((maxVal + 1e-6) / (noiseMean + 1e-6));
-    return { hr, snr };
+
+    const hr=(maxIdx*df)*60;
+    const noise=sum/(maxIndex-minIndex+1);
+    const snr=10*Math.log10((maxVal+1e-6)/(noise+1e-6));
+    return {hr,snr};
   }
 
-  function estimateHRV(signal, fps) {
-    const peaks = [];
-    for (let i = 1; i < signal.length - 1; i++) {
-      if (signal[i] > signal[i - 1] && signal[i] > signal[i + 1]) {
-        peaks.push(i);
-      }
+  function estimateHRV(signal,fps){
+    const peaks=[];
+    for(let i=1;i<signal.length-1;i++){
+      if(signal[i]>signal[i-1] && signal[i]>signal[i+1]) peaks.push(i);
     }
-    if (peaks.length < 3) return null;
-    const rr = [];
-    for (let i = 0; i < peaks.length - 1; i++) {
-      const dt = (peaks[i + 1] - peaks[i]) / fps;
-      rr.push(dt);
+    if(peaks.length<3) return null;
+
+    const rr=[];
+    for(let i=0;i<peaks.length-1;i++){
+      rr.push((peaks[i+1]-peaks[i])/fps);
     }
-    if (rr.length < 2) return null;
-    const diff2 = [];
-    for (let i = 0; i < rr.length - 1; i++) {
-      const d = rr[i + 1] - rr[i];
-      diff2.push(d * d);
+    if(rr.length<2) return null;
+
+    const diff2=[];
+    for(let i=0;i<rr.length-1;i++){
+      diff2.push((rr[i+1]-rr[i])**2);
     }
-    const rmssd = Math.sqrt(mean(diff2)) * 1000;
-    return rmssd;
+    return Math.sqrt(mean(diff2))*1000;
   }
 
-  function fatigueScore(hr, snr, rmssd, eyeMean) {
-    const hrNorm = Math.max(0, Math.min(1, (hr - 50) / 50));
-    const snrNorm = Math.max(0, Math.min(1, snr / 10));
-    const rmssdNorm = rmssd ? Math.max(0, Math.min(1, rmssd / 80)) : 0.5;
+  function fatigueScore(hr,snr,rmssd,eyeOpen){
+    const hrNorm=Math.max(0,Math.min(1,(hr-50)/50));
+    const snrNorm=Math.max(0,Math.min(1,snr/10));
+    const rmssdNorm=rmssd?Math.max(0,Math.min(1,rmssd/80)):0.5;
 
-    // 目の明るさ（平均）を 0〜1 にざっくり正規化（暗い＝目を細めている可能性）
-    let eyeNorm = 0.5;
-    if (eyeMean != null) {
-      eyeNorm = Math.max(0, Math.min(1, (eyeMean - 60) / 80)); // だいたい 60〜140 を想定
-    }
-    const eyeFatigue = 1 - eyeNorm; // 暗いほど疲労大
+    // 目の開き（差分）を 0〜1 に正規化
+    const eyeNorm=Math.max(0,Math.min(1,(eyeOpen-5)/40)); // だいたい 5〜45 を想定
+    const eyeFatigue=1-eyeNorm;
 
-    const fatigue =
-      hrNorm * 0.2 +
-      (1 - snrNorm) * 0.2 +
-      (1 - rmssdNorm) * 0.3 +
-      eyeFatigue * 0.3;
+    const fatigue=
+      hrNorm*0.2 +
+      (1-snrNorm)*0.2 +
+      (1-rmssdNorm)*0.3 +
+      eyeFatigue*0.3;
 
-    const score = Math.round((1 - fatigue) * 100);
-    return Math.max(0, Math.min(100, score));
+    const score=Math.round((1-fatigue)*100);
+    return Math.max(0,Math.min(100,score));
   }
 
-  function fatigueLevel(score) {
-    if (score >= 80) return "レベル1：元気";
-    if (score >= 60) return "レベル2：軽度の疲労";
-    if (score >= 40) return "レベル3：中程度の疲労";
-    if (score >= 20) return "レベル4：強い疲労";
+  function fatigueLevel(score){
+    if(score>=80) return "レベル1：元気";
+    if(score>=60) return "レベル2：軽度の疲労";
+    if(score>=40) return "レベル3：中程度の疲労";
+    if(score>=20) return "レベル4：強い疲労";
     return "レベル5：危険（休息推奨）";
   }
 
-  async function startMeasurement() {
-    if (running) return;
-    running = true;
-    rgbSeries = [];
-    eyeSeries = [];
-    fatigueEl.textContent = "--";
-    levelEl.textContent = "疲労レベル：--";
+  async function startMeasurement(){
+    if(running) return;
+    running=true;
+    rgbSeries=[];
+    eyeSeries=[];
+    fatigueEl.textContent="--";
+    levelEl.textContent="疲労レベル：--";
     logResults("");
     logStatus("カメラ起動中… 顔を中央に合わせてください。");
-    startBtn.disabled = true;
+    startBtn.disabled=true;
 
-    try {
+    try{
       await initCamera();
-    } catch (e) {
+    }catch(e){
       logStatus("カメラが使えません（設定で Safari のカメラ許可を確認）。");
-      running = false;
-      startBtn.disabled = false;
+      running=false;
+      startBtn.disabled=false;
       return;
     }
 
     logStatus("測定中… 30秒間、できるだけ動かないでください。");
-    const interval = setInterval(captureFrame, 1000 / FPS);
+    progressBar.style.display="block";
+    progressFill.style.width="0%";
 
-    setTimeout(() => {
-      running = false;
+    const interval=setInterval(captureFrame,1000/FPS);
+
+    let elapsed=0;
+    const progressTimer=setInterval(()=>{
+      elapsed++;
+      const ratio=elapsed/(DURATION_SEC*FPS);
+      progressFill.style.width=(ratio*100)+"%";
+    },1000/FPS);
+
+    setTimeout(()=>{
+      running=false;
       clearInterval(interval);
+      clearInterval(progressTimer);
+      progressBar.style.display="none";
+
       logStatus("解析中…");
 
-      if (rgbSeries.length < FPS * 10) {
+      if(rgbSeries.length<FPS*10){
         logStatus("データ不足（10秒未満）。もう一度測定してください。");
-        startBtn.disabled = false;
+        startBtn.disabled=false;
         return;
       }
 
-      const sig = pos(rgbSeries);
-      const { hr, snr } = fftHR(sig, FPS);
-      const rmssd = estimateHRV(sig, FPS);
-      const eyeMean = eyeSeries.length ? mean(eyeSeries) : null;
-      const score = fatigueScore(hr, snr, rmssd, eyeMean);
-      const level = fatigueLevel(score);
+      const sig=pos(rgbSeries);
+      const {hr,snr}=fftHR(sig,FPS);
+      const rmssd=estimateHRV(sig,FPS);
+      const eyeOpen=eyeSeries.length?mean(eyeSeries):null;
 
-      fatigueEl.textContent = score.toString();
-      levelEl.textContent = `疲労レベル：${level}`;
+      const score=fatigueScore(hr,snr,rmssd,eyeOpen);
+      const level=fatigueLevel(score);
 
-      let txt = "";
-      txt += `推定HR: ${hr.toFixed(1)} bpm\n`;
-      txt += `SNR: ${snr.toFixed(1)} dB\n`;
-      if (rmssd) txt += `簡易HRV(RMSSD): ${rmssd.toFixed(1)} ms\n`;
-      else txt += `簡易HRV(RMSSD): 推定不可（ピーク不足）\n`;
-      if (eyeMean != null) txt += `目の明るさ指標: ${eyeMean.toFixed(1)}（低いほど目を細めている可能性）\n`;
-      txt += `※参考値（医療用途では使用不可）`;
+      fatigueEl.textContent=score;
+      levelEl.textContent=`疲労レベル：${level}`;
+
+      let txt="";
+      txt+=`推定HR: ${hr.toFixed(1)} bpm\n`;
+      txt+=`SNR: ${snr.toFixed(1)} dB\n`;
+      if(rmssd) txt+=`簡易HRV(RMSSD): ${rmssd.toFixed(1)} ms\n`;
+      else txt+=`簡易HRV(RMSSD): 推定不可（ピーク不足）\n`;
+      if(eyeOpen!=null) txt+=`目の開き指標: ${eyeOpen.toFixed(1)}（小さいほど眠気）\n`;
+      txt+=`※参考値（医療用途では使用不可）`;
       logResults(txt);
 
       logStatus("測定完了。もう一度測る場合は「測定開始」を押してください。");
-      startBtn.disabled = false;
-    }, DURATION_SEC * 1000);
+      startBtn.disabled=false;
+    },DURATION_SEC*1000);
   }
 
-  startBtn.addEventListener('click', () => {
-    if (!running) startMeasurement();
+  startBtn.addEventListener('click',()=>{
+    if(!running) startMeasurement();
   });
 
-  if ('serviceWorker' in navigator) {
-    window.addEventListener('load', () => {
-      navigator.serviceWorker.register('service-worker.js').catch(() => {});
+  if('serviceWorker' in navigator){
+    window.addEventListener('load',()=>{
+      navigator.serviceWorker.register('service-worker.js').catch(()=>{});
     });
   }
 </script>
+</body>
+</html>
 </body>
 </html>
