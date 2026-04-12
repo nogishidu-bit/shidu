@@ -131,16 +131,22 @@
   }
 
   async function initCamera(){
-    const stream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode:"user", width:240, height:180, frameRate:{ideal:FPS} },
-      audio:false
-    });
-    video.srcObject = stream;
-    await video.play();
+  const stream = await navigator.mediaDevices.getUserMedia({
+    video: { facingMode:"user", width:240, height:180, frameRate:{ideal:FPS} },
+    audio:false
+  });
+  video.srcObject = stream;
 
-    canvas.width = video.videoWidth || 240;
-    canvas.height = video.videoHeight || 180;
+  try {
+    await video.play();
+  } catch(e) {
+    // Safari 対策：ユーザー操作後に再度 play() を試す
+    setTimeout(() => video.play(), 100);
   }
+
+  canvas.width = video.videoWidth || 240;
+  canvas.height = video.videoHeight || 180;
+}
 
   function drawFaceGuide(box){
     guide.style.display = "block";
