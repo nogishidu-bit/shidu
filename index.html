@@ -96,7 +96,11 @@
 </main>
 
 <script type="module">
-  import { FaceDetector, FilesetResolver } from "./vision_bundle.js";
+  import * as vision from "./vision_bundle.cjs";
+  const { FaceDetector, FilesetResolver } = vision;
+  window.vision = vision;
+</script>
+
 
   const FPS = 30;
   const DURATION_SEC = 30;
