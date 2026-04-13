@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8">
-  <title>疲労度チェック rPPG PWA</title>
+  <title>疲労度チェック rPPG PWA（肉体労働特化）</title>
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <link rel="manifest" href="manifest.json">
   <meta name="theme-color" content="#111111">
@@ -20,7 +20,7 @@
     /* 顔枠（楕円） */
     #faceGuide {
       position: absolute;
-      top: 160px; /* iPhone SE3 に合わせた位置 */
+      top: 160px;
       left: 50%;
       transform: translateX(-50%);
       width: 220px;
@@ -35,7 +35,7 @@
     /* 目の位置ガイド線 */
     #eyeLine {
       position: absolute;
-      top: 38%; /* 顔の目の高さに近い位置 */
+      top: 38%;
       left: 0;
       width: 100%;
       height: 2px;
@@ -60,10 +60,10 @@
     }
 
     #results { margin-top:10px; font-size:14px; white-space:pre-line; }
-    #scoreBox { margin-top:10px; padding:10px; border-radius:8px; background:#222; display:inline-block; min-width:220px; }
+    #scoreBox { margin-top:10px; padding:10px; border-radius:8px; background:#222; display:inline-block; min-width:260px; }
 
     .label { color:#aaa; font-size:12px; }
-    .value { font-size:20px; font-weight:bold; margin-bottom:4px; }
+    .value { font-size:18px; font-weight:bold; margin-bottom:4px; }
 
     /* レベル色分け */
     .level-safe { color:#4caf50; }
@@ -76,7 +76,7 @@
   </style>
 </head>
 <body>
-<header>疲労度チェック rPPG（iPhone SE3）</header>
+<header>疲労度チェック rPPG（肉体労働特化）</header>
 <main>
   <p>顔を枠に合わせ、目をガイド線に合わせてください（20秒）。</p>
   <button id="startBtn">測定開始</button><br>
@@ -106,6 +106,9 @@
     <div class="label">作業可否</div>
     <div class="value" id="workStatus">--</div>
 
+    <div class="label">危険作業判定</div>
+    <div class="value" id="dangerStatus">--</div>
+
     <div id="results"></div>
   </div>
 </main>
@@ -123,6 +126,7 @@
   const fatigueEl = document.getElementById('fatigueScore');
   const levelEl = document.getElementById('fatigueLevel');
   const workEl = document.getElementById('workStatus');
+  const dangerEl = document.getElementById('dangerStatus');
   const progressBar = document.getElementById('progressBar');
 
   let rgbSeries = [];
@@ -162,7 +166,6 @@
 
     rgbSeries.push([R, G, B]);
 
-    // まぶた用輝度
     const brightness = (R + G + B) / 3;
     brightnessSeries.push(brightness);
   }
@@ -268,13 +271,11 @@
     return Math.sqrt(mean(diff2)) * 1000;
   }
 
-  /* まぶたスコア */
   function eyelidScore(brightnessSeries) {
     if (brightnessSeries.length < 10) return 50;
 
     const minB = Math.min(...brightnessSeries);
     const maxB = Math.max(...brightnessSeries);
-
     const norm = brightnessSeries.map(v => (v - minB) / (maxB - minB + 1e-6));
 
     const avgOpen = mean(norm);
@@ -285,11 +286,11 @@
     }
 
     const blinkPenalty = Math.min(0.3, blinks / 20);
-
     const score = (avgOpen - blinkPenalty) * 100;
     return Math.max(0, Math.min(100, score));
   }
 
+  // 肉体労働特化の割合
   function fatigueScore(hr, snr, rmssd, eyelid) {
     const hrNorm = Math.max(0, Math.min(1, (hr - 50) / 50));
     const snrNorm = Math.max(0, Math.min(1, snr / 10));
@@ -297,11 +298,11 @@
     const eyeNorm = eyelid / 100;
 
     const fatigue =
-      hrNorm * 0.2 +
-      (1 - snrNorm) * 0.1 +
-      (1 - rmssdNorm) * 0.4 +
-      (1 - eyeNorm) * 0.2 +
-      0.1;
+      hrNorm * 0.30 +
+      (1 - rmssdNorm) * 0.35 +
+      (1 - eyeNorm) * 0.25 +
+      (1 - snrNorm) * 0.05 +
+      0.05;
 
     return Math.round((1 - fatigue) * 100);
   }
@@ -326,6 +327,15 @@
     return "作業禁止（危険）";
   }
 
+  // 危険作業の自動判定（OK/NG）
+  function dangerWorkStatus(score) {
+    if (score >= 80) return "OK（安全）";
+    if (score >= 60) return "OK（軽度疲労：重作業は注意）";
+    if (score >= 40) return "NG（注意：危険作業不可）";
+    if (score >= 20) return "NG（休憩推奨：作業不可）";
+    return "NG（危険：作業禁止）";
+  }
+
   async function startMeasurement() {
     if (running) return;
     running = true;
@@ -334,6 +344,7 @@
     fatigueEl.textContent = "--";
     levelEl.textContent = "--";
     workEl.textContent = "--";
+    dangerEl.textContent = "--";
     progressBar.style.width = "0%";
     logResults("");
     logStatus("カメラ起動中…");
@@ -346,6 +357,7 @@
       logStatus("カメラが使えません（設定で Safari のカメラ許可を確認）。");
       running = false;
       startBtn.disabled = false;
+      document.getElementById("faceGuide").style.display = "none";
       return;
     }
 
@@ -356,14 +368,11 @@
 
     const countdown = setInterval(() => {
       remaining--;
-
       if (remaining >= 0) {
         logStatus(`測定中… 残り ${remaining} 秒`);
       }
-
       const progress = ((DURATION_SEC - remaining) / DURATION_SEC) * 100;
       progressBar.style.width = `${progress}%`;
-
     }, 1000);
 
     setTimeout(() => {
@@ -376,6 +385,7 @@
       if (rgbSeries.length < FPS * 10) {
         logStatus("データ不足。もう一度測定してください。");
         startBtn.disabled = false;
+        progressBar.style.width = "0%";
         return;
       }
 
@@ -388,6 +398,7 @@
       fatigueEl.textContent = score;
       levelEl.textContent = fatigueLevel(score);
       workEl.textContent = fatigueWorkStatus(score);
+      dangerEl.textContent = dangerWorkStatus(score);
 
       let txt = "";
       txt += `推定HR: ${hr.toFixed(1)} bpm\n`;
