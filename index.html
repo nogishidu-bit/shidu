@@ -55,8 +55,8 @@
     #progressBar {
       width: 0%;
       height: 100%;
-      background: #1e88e5;
-      transition: width 0.3s linear;
+      background: #1e88e5; /* ← 顔ズレ時に赤へ変更 */
+      transition: width 0.3s linear, background 0.2s linear;
     }
 
     /* 顔ズレ警告 */
@@ -146,6 +146,8 @@
   let baseBrightness = null;
   let baseSamples = [];
   let running = false;
+  let faceOut = false;
+  let validSeconds = 0;
 
   function logStatus(msg) { statusEl.textContent = msg; }
   function logResults(msg) { resultsEl.textContent = msg; }
@@ -157,7 +159,6 @@
     });
     video.srcObject = stream;
   }
-
   function captureFrame() {
     if (!running) return;
     const w = canvas.width;
@@ -191,19 +192,25 @@
       }
     }
 
-    /* --- 顔ズレ警告 --- */
+    /* --- 顔ズレ判定 --- */
+    faceOut = false;
     if (baseBrightness) {
       const diff = Math.abs(brightness - baseBrightness);
-      if (diff > 25) {
+      faceOut = diff > 25;
+
+      if (faceOut) {
         faceWarning.textContent = "顔が枠から外れています";
+        progressBar.style.background = "#ff5252";  /* ← 顔ズレ中は赤 */
       } else {
         faceWarning.textContent = "";
+        progressBar.style.background = "#1e88e5";  /* ← 顔が戻ったら青 */
       }
     }
   }
 
   function mean(arr) { return arr.reduce((a, b) => a + b, 0) / arr.length; }
-    function std(arr) {
+
+  function std(arr) {
     const m = mean(arr);
     return Math.sqrt(arr.reduce((s, x) => s + (x - m) ** 2, 0) / arr.length);
   }
@@ -282,7 +289,6 @@
 
     return { hr, snr };
   }
-
   function estimateHRV(signal, fps) {
     const peaks = [];
     for (let i = 1; i < signal.length - 1; i++) {
@@ -360,7 +366,6 @@
     return "作業禁止（危険）";
   }
 
-  // 危険作業の自動判定（OK/NG）
   function dangerWorkStatus(score) {
     if (score >= 80) return "OK（安全）";
     if (score >= 60) return "OK（軽度疲労：重作業は注意）";
@@ -368,19 +373,66 @@
     if (score >= 20) return "NG（休憩推奨）";
     return "NG（作業禁止）";
   }
-    async function startMeasurement() {
+
+  /* --- 測定終了処理 --- */
+  function finishMeasurement() {
+    running = false;
+    document.getElementById("faceGuide").style.display = "none";
+    faceWarning.textContent = "";
+    logStatus("解析中…");
+
+    if (rgbSeries.length < FPS * 10) {
+      logStatus("データ不足。もう一度測定してください。");
+      startBtn.disabled = false;
+      progressBar.style.width = "0%";
+      return;
+    }
+
+    const sig = pos(rgbSeries);
+    const { hr, snr } = fftHR(sig, FPS);
+    const rmssd = estimateHRV(sig, FPS);
+    const eyelid = eyelidScore(brightnessSeries);
+    const score = fatigueScore(hr, snr, rmssd, eyelid);
+
+    fatigueEl.textContent = score;
+    levelEl.textContent = fatigueLevel(score);
+    workEl.textContent = fatigueWorkStatus(score);
+    dangerEl.textContent = dangerWorkStatus(score);
+
+    let txt = "";
+    txt += `推定HR: ${hr.toFixed(1)} bpm\n`;
+    txt += `SNR: ${snr.toFixed(1)} dB\n`;
+    txt += rmssd ? `HRV(RMSSD): ${rmssd.toFixed(1)} ms\n` : `HRV(RMSSD): 推定不可\n`;
+    txt += `まぶたスコア: ${eyelid.toFixed(1)} / 100\n`;
+    txt += `※参考値（医療用途では使用不可）`;
+    logResults(txt);
+
+    logStatus("測定完了。再測定できます。");
+    startBtn.disabled = false;
+    progressBar.style.width = "0%";
+    progressBar.style.background = "#1e88e5";
+  }
+
+  /* --- 測定開始 --- */
+  async function startMeasurement() {
     if (running) return;
     running = true;
+
     rgbSeries = [];
     brightnessSeries = [];
     baseBrightness = null;
     baseSamples = [];
+    validSeconds = 0;
+    faceOut = false;
+
     fatigueEl.textContent = "--";
     levelEl.textContent = "--";
     workEl.textContent = "--";
     dangerEl.textContent = "--";
     faceWarning.textContent = "";
     progressBar.style.width = "0%";
+    progressBar.style.background = "#1e88e5";
+
     logResults("");
     logStatus("カメラ起動中…");
     startBtn.disabled = true;
@@ -398,56 +450,24 @@
 
     const frameLoop = setInterval(captureFrame, 1000 / FPS);
 
-    let remaining = DURATION_SEC;
-    logStatus(`測定中… 残り ${remaining} 秒`);
-
     const countdown = setInterval(() => {
-      remaining--;
-      if (remaining >= 0) {
-        logStatus(`測定中… 残り ${remaining} 秒`);
+
+      if (!faceOut) {
+        validSeconds++;
+        const progress = (validSeconds / DURATION_SEC) * 100;
+        progressBar.style.width = `${progress}%`;
+        logStatus(`測定中… 有効時間 ${validSeconds} 秒 / 20 秒`);
+      } else {
+        logStatus("顔が枠から外れています（測定一時停止）");
       }
-      const progress = ((DURATION_SEC - remaining) / DURATION_SEC) * 100;
-      progressBar.style.width = `${progress}%`;
+
+      if (validSeconds >= DURATION_SEC) {
+        clearInterval(countdown);
+        clearInterval(frameLoop);
+        finishMeasurement();
+      }
+
     }, 1000);
-
-    setTimeout(() => {
-      running = false;
-      clearInterval(frameLoop);
-      clearInterval(countdown);
-      document.getElementById("faceGuide").style.display = "none";
-      faceWarning.textContent = "";
-      logStatus("解析中…");
-
-      if (rgbSeries.length < FPS * 10) {
-        logStatus("データ不足。もう一度測定してください。");
-        startBtn.disabled = false;
-        progressBar.style.width = "0%";
-        return;
-      }
-
-      const sig = pos(rgbSeries);
-      const { hr, snr } = fftHR(sig, FPS);
-      const rmssd = estimateHRV(sig, FPS);
-      const eyelid = eyelidScore(brightnessSeries);
-      const score = fatigueScore(hr, snr, rmssd, eyelid);
-
-      fatigueEl.textContent = score;
-      levelEl.textContent = fatigueLevel(score);
-      workEl.textContent = fatigueWorkStatus(score);
-      dangerEl.textContent = dangerWorkStatus(score);
-
-      let txt = "";
-      txt += `推定HR: ${hr.toFixed(1)} bpm\n`;
-      txt += `SNR: ${snr.toFixed(1)} dB\n`;
-      txt += rmssd ? `HRV(RMSSD): ${rmssd.toFixed(1)} ms\n` : `HRV(RMSSD): 推定不可\n`;
-      txt += `まぶたスコア: ${eyelid.toFixed(1)} / 100\n`;
-      txt += `※参考値（医療用途では使用不可）`;
-      logResults(txt);
-
-      logStatus("測定完了。再測定できます。");
-      startBtn.disabled = false;
-      progressBar.style.width = "0%";
-    }, DURATION_SEC * 1000);
   }
 
   startBtn.addEventListener('click', () => {
