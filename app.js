@@ -4,7 +4,7 @@ const video = document.getElementById("video");
 let greenBuffer = [];
 const BUFFER_SIZE = 60;
 
-// MediaPipe FaceMesh 設定
+// MediaPipe FaceMesh
 const faceMesh = new FaceMesh.FaceMesh({
   locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`
 });
@@ -18,25 +18,31 @@ faceMesh.setOptions({
 
 faceMesh.onResults(onFaceResults);
 
-// CameraUtils のインスタンス（まだ start しない）
-const camera = new CameraUtils.Camera(video, {
-  onFrame: async () => {
-    await faceMesh.send({ image: video });
-  },
-  width: 640,
-  height: 480
-});
+// ★ カメラ開始（iOS Safari で確実に許可ダイアログが出る）
+async function startCamera() {
+  const stream = await navigator.mediaDevices.getUserMedia({
+    video: { facingMode: "user" },
+    audio: false
+  });
 
-// ★ iOS Safari で許可ダイアログを出すための開始ボタン
+  video.srcObject = stream;
+
+  // iOS Safari では必須
+  await video.play();
+
+  // MediaPipe にフレームを送るループ
+  requestAnimationFrame(processFrame);
+}
+
+async function processFrame() {
+  await faceMesh.send({ image: video });
+  requestAnimationFrame(processFrame);
+}
+
+// ★ ボタン押下でカメラ開始（iOS の必須条件）
 document.getElementById("startBtn").addEventListener("click", async () => {
   try {
-    // カメラ開始（ここで getUserMedia が呼ばれる）
-    await camera.start();
-
-    // iOS Safari では video.play() が必須
-    await video.play();
-
-    console.log("Camera started");
+    await startCamera();
   } catch (e) {
     alert("カメラが使用できません。Safari の設定でカメラ許可を確認してください。");
     console.error(e);
@@ -49,10 +55,8 @@ function onFaceResults(results) {
 
   const lm = results.multiFaceLandmarks[0];
 
-  // 頬の4点
   const pts = [lm[234], lm[454], lm[152], lm[10]];
 
-  // 平均RGBを取る
   const canvas = document.createElement("canvas");
   canvas.width = video.videoWidth;
   canvas.height = video.videoHeight;
@@ -75,7 +79,6 @@ function onFaceResults(results) {
   }
   const gAvg = gSum / (data.length / 4);
 
-  // rPPG バッファに追加
   greenBuffer.push(gAvg);
   if (greenBuffer.length > BUFFER_SIZE) greenBuffer.shift();
 
@@ -90,22 +93,19 @@ function onFaceResults(results) {
   }
 }
 
-// 心拍（FFT）※簡易版
+// 心拍（簡易）
 function calcHR(buffer) {
   return Math.floor(60 + Math.random() * 20);
 }
 
-// HRV
 function calcHRV(buffer) {
   return Math.floor(20 + Math.random() * 40);
 }
 
-// SNR
 function calcSNR(buffer) {
   return Math.random() * 3 + 1;
 }
 
-// 疲労スコア
 function calcFatigueScore(hr, hrv, snr, face, blink) {
   const hrNorm = Math.max(0, Math.min(100, 100 - Math.abs(hr - 75)));
   const hrvNorm = Math.max(0, Math.min(100, hrv));
@@ -120,7 +120,6 @@ function calcFatigueScore(hr, hrv, snr, face, blink) {
   );
 }
 
-// UI 更新
 function updateUI(score, hr, hrv, snr) {
   const max = 283;
   const offset = max - (max * score) / 100;
