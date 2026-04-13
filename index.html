@@ -9,11 +9,39 @@
   <style>
     body { margin:0; font-family: system-ui, sans-serif; background:#111; color:#eee; text-align:center; }
     header { padding:10px 0; background:#181818; font-size:18px; font-weight:bold; }
-    main { padding:10px; }
+    main { padding:10px; position:relative; }
     video { width:260px; max-width:80vw; transform:scaleX(-1); border-radius:8px; margin-top:8px; }
+
     #startBtn { padding:10px 20px; font-size:16px; margin:10px 0; border-radius:6px; border:none; background:#1e88e5; color:#fff; }
     #startBtn:disabled { background:#555; }
+
     #status { font-size:13px; color:#ccc; min-height:2em; white-space:pre-line; }
+
+    /* 顔枠（楕円） */
+    #faceGuide {
+      position: absolute;
+      top: 160px; /* iPhone SE3 に合わせた位置 */
+      left: 50%;
+      transform: translateX(-50%);
+      width: 220px;
+      height: 280px;
+      border: 2px solid #1e88e5;
+      border-radius: 50% / 60%;
+      opacity: 0.6;
+      pointer-events: none;
+      display: none;
+    }
+
+    /* 目の位置ガイド線 */
+    #eyeLine {
+      position: absolute;
+      top: 38%; /* 顔の目の高さに近い位置 */
+      left: 0;
+      width: 100%;
+      height: 2px;
+      background: #1e88e5;
+      opacity: 0.7;
+    }
 
     /* 棒ゲージ */
     #progressContainer {
@@ -50,10 +78,16 @@
 <body>
 <header>疲労度チェック rPPG（iPhone SE3）</header>
 <main>
-  <p>顔を画面中央に合わせて、20秒じっとしてください。</p>
+  <p>顔を枠に合わせ、目をガイド線に合わせてください（20秒）。</p>
   <button id="startBtn">測定開始</button><br>
+
   <video id="video" autoplay playsinline></video>
   <canvas id="canvas" width="240" height="180"></canvas>
+
+  <!-- 顔枠＋目ガイド線 -->
+  <div id="faceGuide">
+    <div id="eyeLine"></div>
+  </div>
 
   <div id="status"></div>
 
@@ -92,6 +126,7 @@
   const progressBar = document.getElementById('progressBar');
 
   let rgbSeries = [];
+  let brightnessSeries = [];
   let running = false;
 
   function logStatus(msg) { statusEl.textContent = msg; }
@@ -123,7 +158,13 @@
       b += img[i + 2];
       c++;
     }
-    rgbSeries.push([r / c, g / c, b / c]);
+    const R = r / c, G = g / c, B = b / c;
+
+    rgbSeries.push([R, G, B]);
+
+    // まぶた用輝度
+    const brightness = (R + G + B) / 3;
+    brightnessSeries.push(brightness);
   }
 
   function mean(arr) { return arr.reduce((a, b) => a + b, 0) / arr.length; }
@@ -227,15 +268,40 @@
     return Math.sqrt(mean(diff2)) * 1000;
   }
 
-  function fatigueScore(hr, snr, rmssd) {
+  /* まぶたスコア */
+  function eyelidScore(brightnessSeries) {
+    if (brightnessSeries.length < 10) return 50;
+
+    const minB = Math.min(...brightnessSeries);
+    const maxB = Math.max(...brightnessSeries);
+
+    const norm = brightnessSeries.map(v => (v - minB) / (maxB - minB + 1e-6));
+
+    const avgOpen = mean(norm);
+
+    let blinks = 0;
+    for (let i = 1; i < norm.length; i++) {
+      if (norm[i] < norm[i - 1] - 0.15) blinks++;
+    }
+
+    const blinkPenalty = Math.min(0.3, blinks / 20);
+
+    const score = (avgOpen - blinkPenalty) * 100;
+    return Math.max(0, Math.min(100, score));
+  }
+
+  function fatigueScore(hr, snr, rmssd, eyelid) {
     const hrNorm = Math.max(0, Math.min(1, (hr - 50) / 50));
     const snrNorm = Math.max(0, Math.min(1, snr / 10));
     const rmssdNorm = rmssd ? Math.max(0, Math.min(1, rmssd / 80)) : 0.5;
+    const eyeNorm = eyelid / 100;
 
     const fatigue =
-      hrNorm * 0.3 +
-      (1 - snrNorm) * 0.2 +
-      (1 - rmssdNorm) * 0.5;
+      hrNorm * 0.2 +
+      (1 - snrNorm) * 0.1 +
+      (1 - rmssdNorm) * 0.4 +
+      (1 - eyeNorm) * 0.2 +
+      0.1;
 
     return Math.round((1 - fatigue) * 100);
   }
@@ -264,6 +330,7 @@
     if (running) return;
     running = true;
     rgbSeries = [];
+    brightnessSeries = [];
     fatigueEl.textContent = "--";
     levelEl.textContent = "--";
     workEl.textContent = "--";
@@ -271,6 +338,8 @@
     logResults("");
     logStatus("カメラ起動中…");
     startBtn.disabled = true;
+
+    document.getElementById("faceGuide").style.display = "block";
 
     try { await initCamera(); }
     catch (e) {
@@ -280,10 +349,8 @@
       return;
     }
 
-    // ① 30fps フレーム取得
     const frameLoop = setInterval(captureFrame, 1000 / FPS);
 
-    // ② 1秒ごとのカウントダウン＋棒ゲージ
     let remaining = DURATION_SEC;
     logStatus(`測定中… 残り ${remaining} 秒`);
 
@@ -299,11 +366,11 @@
 
     }, 1000);
 
-    // ③ 測定終了
     setTimeout(() => {
       running = false;
       clearInterval(frameLoop);
       clearInterval(countdown);
+      document.getElementById("faceGuide").style.display = "none";
       logStatus("解析中…");
 
       if (rgbSeries.length < FPS * 10) {
@@ -315,7 +382,8 @@
       const sig = pos(rgbSeries);
       const { hr, snr } = fftHR(sig, FPS);
       const rmssd = estimateHRV(sig, FPS);
-      const score = fatigueScore(hr, snr, rmssd);
+      const eyelid = eyelidScore(brightnessSeries);
+      const score = fatigueScore(hr, snr, rmssd, eyelid);
 
       fatigueEl.textContent = score;
       levelEl.textContent = fatigueLevel(score);
@@ -325,6 +393,7 @@
       txt += `推定HR: ${hr.toFixed(1)} bpm\n`;
       txt += `SNR: ${snr.toFixed(1)} dB\n`;
       txt += rmssd ? `HRV(RMSSD): ${rmssd.toFixed(1)} ms\n` : `HRV(RMSSD): 推定不可\n`;
+      txt += `まぶたスコア: ${eyelid.toFixed(1)} / 100\n`;
       txt += `※参考値（医療用途では使用不可）`;
       logResults(txt);
 
