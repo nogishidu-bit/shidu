@@ -35,7 +35,15 @@
     .metrics { margin-top:20px; display:flex; justify-content:center; gap:12px; }
     .card { background:#222; padding:10px 14px; border-radius:8px; min-width:90px; }
 
-    video { display:none; }
+    video {
+  opacity: 0;
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 320px;
+  height: 240px;
+  z-index: -1;
+}
   </style>
 </head>
 
