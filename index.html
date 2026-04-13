@@ -2,538 +2,123 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8">
-  <title>疲労度チェック rPPG PWA（肉体労働特化・改善版）</title>
+  <title>疲労度チェック rPPG（目ガイド版）</title>
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <link rel="manifest" href="manifest.json">
-  <meta name="theme-color" content="#111111">
-  <style>
-    body { margin:0; font-family: system-ui, sans-serif; background:#111; color:#eee; text-align:center; }
-    header { padding:10px 0; background:#181818; font-size:18px; font-weight:bold; }
-    main { padding:10px; position:relative; }
-    video { width:260px; max-width:80vw; transform:scaleX(-1); border-radius:8px; margin-top:8px; }
+  <script type="module">
+    import {
+      FaceLandmarker,
+      FilesetResolver
+    } from "./wasm/vision_bundle.js";
 
-    #startBtn { padding:10px 20px; font-size:16px; margin:10px 0; border-radius:6px; border:none; background:#1e88e5; color:#fff; }
-    #startBtn:disabled { background:#555; }
+    let landmarker;
+    let video, canvas, ctx;
+    let running = false;
 
-    #status { font-size:13px; color:#ccc; min-height:2em; white-space:pre-line; }
+    async function initFaceLandmarker() {
+      const vision = await FilesetResolver.forVisionTasks(
+        "./wasm"
+      );
 
-    /* 顔枠（楕円） */
-    #faceGuide {
-      position: absolute;
-      border: 2px solid #1e88e5;
-      border-radius: 50% / 60%;
-      opacity: 0.6;
-      pointer-events: none;
-      display: none;
+      landmarker = await FaceLandmarker.createFromOptions(vision, {
+        baseOptions: {
+          modelAssetPath: "./wasm/face_landmarker.task"
+        },
+        runningMode: "VIDEO",
+        numFaces: 1,
+        outputFaceBlendshapes: false,
+        outputFacialTransformationMatrixes: false
+      });
     }
 
-    /* 目の位置ガイド線（顔枠内の横線） */
-    #eyeLine {
-      position: absolute;
-      left: 0;
-      width: 100%;
-      height: 2px;
-      background: #1e88e5;
-      opacity: 0.7;
+    async function initCamera() {
+      video = document.getElementById("video");
+      canvas = document.getElementById("canvas");
+      ctx = canvas.getContext("2d");
+
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: "user" },
+        audio: false
+      });
+      video.srcObject = stream;
+
+      return new Promise(resolve => {
+        video.onloadedmetadata = () => {
+          canvas.width = video.videoWidth;
+          canvas.height = video.videoHeight;
+          resolve();
+        };
+      });
     }
 
-    /* 棒ゲージ */
-    #progressContainer {
-      width: 80%;
-      height: 12px;
-      background: #333;
-      border-radius: 6px;
-      margin: 10px auto;
-      overflow: hidden;
-    }
-    #progressBar {
-      width: 0%;
-      height: 100%;
-      background: #1e88e5;
-      transition: width 0.3s linear, background 0.2s linear;
-    }
+    function drawEye(points, color) {
+      ctx.beginPath();
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 2;
 
-    #faceWarning {
-      color:#ff5252;
-      font-weight:bold;
-      min-height:1.5em;
-      margin-top:5px;
-    }
+      const p0 = points[0];
+      ctx.moveTo(p0.x * canvas.width, p0.y * canvas.height);
 
-    #results { margin-top:10px; font-size:14px; white-space:pre-line; }
-    #scoreBox { margin-top:10px; padding:10px; border-radius:8px; background:#222; display:inline-block; min-width:260px; }
-
-    .label { color:#aaa; font-size:12px; }
-    .value { font-size:18px; font-weight:bold; margin-bottom:4px; }
-
-    .level-safe { color:#4caf50; }
-    .level-normal { color:#8bc34a; }
-    .level-caution { color:#ffeb3b; }
-    .level-warning { color:#ff9800; }
-    .level-danger { color:#f44336; }
-
-    canvas { display:none; }
-  </style>
-</head>
-<body>
-<header>疲労度チェック rPPG（肉体労働特化・改善版）</header>
-<main>
-  <p>顔を枠に合わせ、目をガイド線に合わせてください（20秒）。</p>
-  <button id="startBtn">測定開始</button><br>
-
-  <div style="position:relative; display:inline-block;">
-    <video id="video" autoplay playsinline></video>
-    <canvas id="canvas"></canvas>
-
-    <!-- 顔枠＋目ガイド線（video に追従） -->
-    <div id="faceGuide">
-      <div id="eyeLine"></div>
-    </div>
-  </div>
-
-  <div id="status"></div>
-  <div id="faceWarning"></div>
-
-  <div id="progressContainer">
-    <div id="progressBar"></div>
-  </div>
-
-  <div id="scoreBox">
-    <div class="label">疲労スコア（0〜100）</div>
-    <div class="value" id="fatigueScore">--</div>
-
-    <div class="label">疲労レベル</div>
-    <div class="value" id="fatigueLevel">--</div>
-
-    <div class="label">作業可否</div>
-    <div class="value" id="workStatus">--</div>
-
-    <div class="label">危険作業判定</div>
-    <div class="value" id="dangerStatus">--</div>
-
-    <div id="results"></div>
-  </div>
-</main>
-
-<script>
-  const FPS = 30;
-  const DURATION_SEC = 20;
-
-  const video = document.getElementById('video');
-  const canvas = document.getElementById('canvas');
-  const ctx = canvas.getContext('2d');
-  const startBtn = document.getElementById('startBtn');
-  const statusEl = document.getElementById('status');
-  const resultsEl = document.getElementById('results');
-  const fatigueEl = document.getElementById('fatigueScore');
-  const levelEl = document.getElementById('fatigueLevel');
-  const workEl = document.getElementById('workStatus');
-  const dangerEl = document.getElementById('dangerStatus');
-  const progressBar = document.getElementById('progressBar');
-  const faceWarning = document.getElementById('faceWarning');
-  const faceGuide = document.getElementById('faceGuide');
-  const eyeLine = document.getElementById('eyeLine');
-
-  let rgbSeries = [];
-  let brightnessSeries = [];
-  let baseBrightness = null;
-  let baseSamples = [];
-  let running = false;
-  let eyeOut = false;
-  let validSeconds = 0;
-  let frameLoop = null;
-  let countdown = null;
-  let stream = null;
-
-  function logStatus(msg) { statusEl.textContent = msg; }
-  function logResults(msg) { resultsEl.textContent = msg; }
-
-  async function initCamera() {
-    if (stream) return;
-    stream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: "user", frameRate: { ideal: FPS } },
-      audio: false
-    });
-    video.srcObject = stream;
-
-    return new Promise(resolve => {
-      video.onloadedmetadata = () => {
-        // video 実サイズに合わせて canvas を設定
-        const vw = video.videoWidth;
-        const vh = video.videoHeight;
-        const scale = 0.5; // 計算負荷軽減のため半分
-        canvas.width = Math.floor(vw * scale);
-        canvas.height = Math.floor(vh * scale);
-
-        // 顔ガイド枠を video の上に重ねる
-        updateFaceGuideLayout();
-        resolve();
-      };
-    });
-  }
-
-  function updateFaceGuideLayout() {
-    const rect = video.getBoundingClientRect();
-    const guideWidth = rect.width * 0.7;
-    const guideHeight = rect.height * 0.9;
-    faceGuide.style.width = guideWidth + "px";
-    faceGuide.style.height = guideHeight + "px";
-    faceGuide.style.left = (rect.left + rect.width / 2 - guideWidth / 2) + "px";
-    faceGuide.style.top = (rect.top + rect.height / 2 - guideHeight / 2) + "px";
-
-    // 目のガイド線は顔枠の上から 40% あたり
-    eyeLine.style.top = "40%";
-  }
-
-  window.addEventListener('resize', () => {
-    if (running) updateFaceGuideLayout();
-  });
-
-  function captureFrame() {
-    if (!running) return;
-    if (!video.videoWidth || !video.videoHeight) return;
-
-    const w = canvas.width;
-    const h = canvas.height;
-    ctx.drawImage(video, 0, 0, w, h);
-
-    // ROI：両頬中心（顔の下半分寄り）
-    const roiWidth = Math.floor(w * 0.3);
-    const roiHeight = Math.floor(h * 0.25);
-    const sx = Math.floor(w / 2 - roiWidth / 2);
-    const sy = Math.floor(h * 0.55); // 目より下（頬〜口の上）
-
-    let img;
-    try {
-      img = ctx.getImageData(sx, sy, roiWidth, roiHeight).data;
-    } catch (e) {
-      return;
-    }
-
-    let r = 0, g = 0, b = 0, c = 0;
-    for (let i = 0; i < img.length; i += 4) {
-      r += img[i];
-      g += img[i + 1];
-      b += img[i + 2];
-      c++;
-    }
-    const R = r / c, G = g / c, B = b / c;
-    rgbSeries.push([R, G, B]);
-
-    const brightness = (R + G + B) / 3;
-    brightnessSeries.push(brightness);
-
-    // 基準明るさ（最初の1秒、かつ ROI が安定していそうなとき）
-    if (baseBrightness === null && baseSamples.length < FPS) {
-      baseSamples.push(brightness);
-      if (baseSamples.length === FPS) {
-        baseBrightness = mean(baseSamples);
-      }
-    }
-
-    // 顔ズレ（簡易）：基準明るさからの差分＋フレーム間変動
-    eyeOut = false;
-    if (baseBrightness !== null) {
-      const diff = Math.abs(brightness - baseBrightness);
-      const last = brightnessSeries.length > 1 ? brightnessSeries[brightnessSeries.length - 2] : brightness;
-      const frameDiff = Math.abs(brightness - last);
-
-      // 明るさが大きく変わる or フレーム間変動が大きい → 顔が動いた/ズレたとみなす
-      if (diff > 30 || frameDiff > 15) {
-        eyeOut = true;
+      for (let i = 1; i < points.length; i++) {
+        const p = points[i];
+        ctx.lineTo(p.x * canvas.width, p.y * canvas.height);
       }
 
-      if (eyeOut) {
-        faceWarning.textContent = "顔の位置が安定していません";
-        progressBar.style.background = "#ff5252";
-      } else {
-        faceWarning.textContent = "";
-        progressBar.style.background = "#1e88e5";
-      }
-    }
-  }
-
-  function mean(arr) { return arr.reduce((a, b) => a + b, 0) / arr.length; }
-
-  function std(arr) {
-    const m = mean(arr);
-    return Math.sqrt(arr.reduce((s, x) => s + (x - m) ** 2, 0) / arr.length);
-  }
-
-  function detrendAndSmooth(sig, win = 5) {
-    const n = sig.length;
-    const m = mean(sig);
-    const x = sig.map(v => v - m);
-    const y = [];
-    for (let i = 0; i < n; i++) {
-      let s = 0, c = 0;
-      for (let k = -win; k <= win; k++) {
-        const j = i + k;
-        if (j >= 0 && j < n) { s += x[j]; c++; }
-      }
-      y.push(s / c);
-    }
-    return y;
-  }
-
-  // POS 法
-  function pos(rgbSeries) {
-    const n = rgbSeries.length;
-    const r = rgbSeries.map(v => v[0]);
-    const g = rgbSeries.map(v => v[1]);
-    const b = rgbSeries.map(v => v[2]);
-
-    const mr = mean(r), mg = mean(g), mb = mean(b);
-    const X = [], Y = [];
-    for (let i = 0; i < n; i++) {
-      const nr = r[i] / mr;
-      const ng = g[i] / mg;
-      const nb = b[i] / mb;
-      X.push(ng - nb);
-      Y.push(-2 * nr + ng + nb);
-    }
-    const alpha = std(X) / (std(Y) || 1);
-    const s = X.map((v, i) => v + alpha * Y[i]);
-    return detrendAndSmooth(s, 3);
-  }
-
-  // 心拍帯域だけの簡易DFT（0.8〜2.0Hz）
-  function fftHR_band(signal, fps) {
-    const n = signal.length;
-    const df = fps / n;
-    const minHz = 0.8, maxHz = 2.0;
-    const minIndex = Math.max(1, Math.floor(minHz / df));
-    const maxIndex = Math.min(Math.floor(maxHz / df), Math.floor(n / 2) - 1);
-
-    let maxVal = -1, maxIdx = minIndex;
-    let sum = 0;
-
-    for (let k = minIndex; k <= maxIndex; k++) {
-      let re = 0, im = 0;
-      for (let t = 0; t < n; t++) {
-        const angle = -2 * Math.PI * k * t / n;
-        const v = signal[t];
-        re += v * Math.cos(angle);
-        im += v * Math.sin(angle);
-      }
-      const mag = Math.sqrt(re * re + im * im);
-      if (mag > maxVal) {
-        maxVal = mag;
-        maxIdx = k;
-      }
-      sum += mag;
+      ctx.closePath();
+      ctx.stroke();
     }
 
-    const peakFreq = maxIdx * df;
-    const hr = peakFreq * 60;
-    const noiseMean = sum / (maxIndex - minIndex + 1);
-    const snr = 10 * Math.log10((maxVal + 1e-6) / (noiseMean + 1e-6));
-
-    return { hr, snr };
-  }
-
-  // HRV（RMSSD）簡易版：ピークにリファクトリ期間を入れる
-  function estimateHRV(signal, fps) {
-    const peaks = [];
-    const minDist = Math.floor(fps * 0.4); // 0.4秒以上離れたピークのみ
-
-    for (let i = 1; i < signal.length - 1; i++) {
-      if (signal[i] > signal[i - 1] && signal[i] > signal[i + 1]) {
-        if (peaks.length === 0 || i - peaks[peaks.length - 1] > minDist) {
-          peaks.push(i);
-        }
-      }
-    }
-    if (peaks.length < 3) return null;
-
-    const rr = [];
-    for (let i = 0; i < peaks.length - 1; i++) {
-      rr.push((peaks[i + 1] - peaks[i]) / fps);
-    }
-    if (rr.length < 2) return null;
-
-    const diff2 = [];
-    for (let i = 0; i < rr.length - 1; i++) {
-      diff2.push((rr[i + 1] - rr[i]) ** 2);
-    }
-    return Math.sqrt(mean(diff2)) * 1000;
-  }
-
-  // まぶたスコア（明るさ変動＋瞬きっぽい急落）
-  function eyelidScore(brightnessSeries) {
-    if (brightnessSeries.length < 10) return 50;
-
-    const minB = Math.min(...brightnessSeries);
-    const maxB = Math.max(...brightnessSeries);
-    const norm = brightnessSeries.map(v => (v - minB) / (maxB - minB + 1e-6));
-
-    const avgOpen = mean(norm);
-
-    let blinks = 0;
-    for (let i = 1; i < norm.length; i++) {
-      if (norm[i] < norm[i - 1] - 0.2) blinks++;
-    }
-
-    const blinkPenalty = Math.min(0.4, blinks / 20);
-    const score = (avgOpen - blinkPenalty) * 100;
-    return Math.max(0, Math.min(100, score));
-  }
-
-  // 肉体労働特化の割合
-  // HR 30%, HRV 35%, まぶた 25%, SNR 5%, ベース 5%
-  function fatigueScore(hr, snr, rmssd, eyelid) {
-    const hrNorm = Math.max(0, Math.min(1, (hr - 50) / 50));       // 50〜100bpm
-    const snrNorm = Math.max(0, Math.min(1, snr / 10));            // 0〜10dB
-    const rmssdNorm = rmssd ? Math.max(0, Math.min(1, rmssd / 80)) : 0.5; // 0〜80ms
-    const eyeNorm = eyelid / 100;
-
-    const fatigue =
-      hrNorm * 0.30 +
-      (1 - rmssdNorm) * 0.35 +
-      (1 - eyeNorm) * 0.25 +
-      (1 - snrNorm) * 0.05 +
-      0.05;
-
-    // スコアは高いほど元気（0〜100）
-    return Math.round((1 - fatigue) * 100);
-  }
-
-  function fatigueLevel(score) {
-    levelEl.className = "";
-    if (score >= 80) { levelEl.classList.add("level-safe"); return "レベル5：最良（Safe）"; }
-    if (score >= 60) { levelEl.classList.add("level-normal"); return "レベル4：良好（Normal）"; }
-    if (score >= 40) { levelEl.classList.add("level-caution"); return "レベル3：注意（Caution）"; }
-    if (score >= 20) { levelEl.classList.add("level-warning"); return "レベル2：要警戒（Warning）"; }
-    levelEl.classList.add("level-danger");
-    return "レベル1：危険（Danger）";
-  }
-
-  function fatigueWorkStatus(score) {
-    if (score >= 80) return "作業可（安全）";
-    if (score >= 60) return "作業可（軽度疲労）";
-    if (score >= 40) return "注意（要観察）";
-    if (score >= 20) return "作業不可（休憩推奨）";
-    return "作業禁止（危険）";
-  }
-
-  function dangerWorkStatus(score) {
-    if (score >= 80) return "OK（安全）";
-    if (score >= 60) return "OK（軽度疲労：重作業は注意）";
-    if (score >= 40) return "NG（危険作業不可）";
-    if (score >= 20) return "NG（休憩推奨）";
-    return "NG（作業禁止）";
-  }
-
-  function finishMeasurement() {
-    running = false;
-    faceGuide.style.display = "none";
-    faceWarning.textContent = "";
-    logStatus("解析中…");
-
-    if (rgbSeries.length < FPS * 10) {
-      logStatus("データ不足。もう一度測定してください。");
-      startBtn.disabled = false;
-      progressBar.style.width = "0%";
-      progressBar.style.background = "#1e88e5";
-      return;
-    }
-
-    const sig = pos(rgbSeries);
-    const { hr, snr } = fftHR_band(sig, FPS);
-    const rmssd = estimateHRV(sig, FPS);
-    const eyelid = eyelidScore(brightnessSeries);
-    const score = fatigueScore(hr, snr, rmssd, eyelid);
-
-    fatigueEl.textContent = score;
-    levelEl.textContent = fatigueLevel(score);
-    workEl.textContent = fatigueWorkStatus(score);
-    dangerEl.textContent = dangerWorkStatus(score);
-
-    let txt = "";
-    txt += `推定HR: ${hr.toFixed(1)} bpm\n`;
-    txt += `SNR: ${snr.toFixed(1)} dB\n`;
-    txt += rmssd ? `HRV(RMSSD): ${rmssd.toFixed(1)} ms\n` : `HRV(RMSSD): 推定不可\n`;
-    txt += `まぶたスコア: ${eyelid.toFixed(1)} / 100\n`;
-    txt += `※参考値（医療用途では使用不可）`;
-    logResults(txt);
-
-    logStatus("測定完了。再測定できます。");
-    startBtn.disabled = false;
-    progressBar.style.width = "0%";
-    progressBar.style.background = "#1e88e5";
-  }
-
-  async function startMeasurement() {
-    if (running) return;
-    running = true;
-
-    rgbSeries = [];
-    brightnessSeries = [];
-    baseBrightness = null;
-    baseSamples = [];
-    validSeconds = 0;
-    eyeOut = false;
-
-    fatigueEl.textContent = "--";
-    levelEl.textContent = "--";
-    workEl.textContent = "--";
-    dangerEl.textContent = "--";
-    faceWarning.textContent = "";
-    progressBar.style.width = "0%";
-    progressBar.style.background = "#1e88e5";
-
-    logResults("");
-    logStatus("カメラ起動中…");
-    startBtn.disabled = true;
-
-    try {
-      await initCamera();
-    } catch (e) {
-      logStatus("カメラが使えません（設定で Safari のカメラ許可を確認）。");
-      running = false;
-      startBtn.disabled = false;
-      return;
-    }
-
-    updateFaceGuideLayout();
-    faceGuide.style.display = "block";
-
-    if (frameLoop) clearInterval(frameLoop);
-    if (countdown) clearInterval(countdown);
-
-    frameLoop = setInterval(captureFrame, 1000 / FPS);
-
-    countdown = setInterval(() => {
+    async function detectLoop() {
       if (!running) return;
 
-      if (!eyeOut && baseBrightness !== null) {
-        validSeconds++;
-        const progress = (validSeconds / DURATION_SEC) * 100;
-        progressBar.style.width = `${progress}%`;
-        logStatus(`測定中… 有効時間 ${validSeconds} 秒 / ${DURATION_SEC} 秒`);
-      } else if (baseBrightness === null) {
-        logStatus("基準明るさ取得中… 顔を枠に合わせてください");
-      } else {
-        logStatus("顔の位置が安定していません（測定一時停止）");
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+      const now = performance.now();
+      const result = await landmarker.detectForVideo(video, now);
+
+      if (result.faceLandmarks && result.faceLandmarks.length > 0) {
+        const lm = result.faceLandmarks[0];
+
+        // 左目（MediaPipe のランドマーク index）
+        const leftEyeIdx = [33, 7, 163, 144, 145, 153, 154, 155, 133];
+        const leftEye = leftEyeIdx.map(i => lm[i]);
+
+        // 右目
+        const rightEyeIdx = [263, 249, 390, 373, 374, 380, 381, 382, 362];
+        const rightEye = rightEyeIdx.map(i => lm[i]);
+
+        drawEye(leftEye, "#1e88e5");
+        drawEye(rightEye, "#1e88e5");
       }
 
-      if (validSeconds >= DURATION_SEC) {
-        clearInterval(countdown);
-        clearInterval(frameLoop);
-        finishMeasurement();
-      }
-    }, 1000);
-  }
+      requestAnimationFrame(detectLoop);
+    }
 
-  startBtn.addEventListener('click', () => {
-    if (!running) startMeasurement();
-  });
+    async function start() {
+      if (running) return;
+      running = true;
 
-  if ('serviceWorker' in navigator) {
-    window.addEventListener('load', () => {
-      navigator.serviceWorker.register('service-worker.js');
-    });
-  }
-</script>
+      await initCamera();
+      await initFaceLandmarker();
+
+      detectLoop();
+    }
+
+    window.start = start;
+  </script>
+
+  <style>
+    body { background:#111; color:#eee; text-align:center; margin:0; }
+    video { width:260px; transform:scaleX(-1); border-radius:8px; }
+    canvas { width:260px; transform:scaleX(-1); border-radius:8px; }
+    button { margin-top:10px; padding:10px 20px; }
+  </style>
+</head>
+
+<body>
+  <h2>疲労度チェック（目の輪郭ガイド版）</h2>
+  <button onclick="start()">開始</button><br>
+
+  <video id="video" autoplay playsinline></video>
+  <canvas id="canvas"></canvas>
 </body>
 </html>
