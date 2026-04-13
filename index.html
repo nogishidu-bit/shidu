@@ -419,61 +419,62 @@ if (baseBrightness) {
   }
 
   /* --- 測定開始 --- */
-  async function startMeasurement() {
-    if (running) return;
-    running = true;
+async function startMeasurement() {
+  if (running) return;
+  running = true;
 
-    rgbSeries = [];
-    brightnessSeries = [];
-    baseBrightness = null;
-    baseSamples = [];
-    validSeconds = 0;
-    faceOut = false;
+  rgbSeries = [];
+  brightnessSeries = [];
+  baseBrightness = null;
+  baseSamples = [];
+  validSeconds = 0;
+  eyeOut = false;   // ★ ここを faceOut ではなく eyeOut に統一
 
-    fatigueEl.textContent = "--";
-    levelEl.textContent = "--";
-    workEl.textContent = "--";
-    dangerEl.textContent = "--";
-    faceWarning.textContent = "";
-    progressBar.style.width = "0%";
-    progressBar.style.background = "#1e88e5";
+  fatigueEl.textContent = "--";
+  levelEl.textContent = "--";
+  workEl.textContent = "--";
+  dangerEl.textContent = "--";
+  faceWarning.textContent = "";
+  progressBar.style.width = "0%";
+  progressBar.style.background = "#1e88e5";
 
-    logResults("");
-    logStatus("カメラ起動中…");
-    startBtn.disabled = true;
+  logResults("");
+  logStatus("カメラ起動中…");
+  startBtn.disabled = true;
 
-    document.getElementById("faceGuide").style.display = "block";
+  document.getElementById("faceGuide").style.display = "block";
 
-    try { await initCamera(); }
-    catch (e) {
-      logStatus("カメラが使えません（設定で Safari のカメラ許可を確認）。");
-      running = false;
-      startBtn.disabled = false;
-      document.getElementById("faceGuide").style.display = "none";
-      return;
+  try {
+    await initCamera();
+  } catch (e) {
+    logStatus("カメラが使えません（設定で Safari のカメラ許可を確認）。");
+    running = false;
+    startBtn.disabled = false;
+    document.getElementById("faceGuide").style.display = "none";
+    return;
+  }
+
+  const frameLoop = setInterval(captureFrame, 1000 / FPS);
+
+  const countdown = setInterval(() => {
+
+    if (!eyeOut) {
+      validSeconds++;
+      const progress = (validSeconds / DURATION_SEC) * 100;
+      progressBar.style.width = `${progress}%`;
+      logStatus(`測定中… 有効時間 ${validSeconds} 秒 / 20 秒`);
+    } else {
+      logStatus("目線が外れています（測定一時停止）");
     }
 
-    const frameLoop = setInterval(captureFrame, 1000 / FPS);
+    if (validSeconds >= DURATION_SEC) {
+      clearInterval(countdown);
+      clearInterval(frameLoop);
+      finishMeasurement();
+    }
 
-    const countdown = setInterval(() => {
-
-      if (!eyeOut) {
-  validSeconds++;
-  ...
-} else {
-  logStatus("目線が外れています（測定一時停止）");
+  }, 1000);
 }
-
-
-
-      if (validSeconds >= DURATION_SEC) {
-        clearInterval(countdown);
-        clearInterval(frameLoop);
-        finishMeasurement();
-      }
-
-    }, 1000);
-  }
 
   startBtn.addEventListener('click', () => {
     if (!running) startMeasurement();
