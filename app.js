@@ -18,7 +18,7 @@ faceMesh.setOptions({
 
 faceMesh.onResults(onFaceResults);
 
-// カメラ開始
+// CameraUtils のインスタンス（まだ start しない）
 const camera = new CameraUtils.Camera(video, {
   onFrame: async () => {
     await faceMesh.send({ image: video });
@@ -26,10 +26,22 @@ const camera = new CameraUtils.Camera(video, {
   width: 640,
   height: 480
 });
-camera.start();
 
-video.play();   // ← ★ここに追加（iOS Safari で必須）
+// ★ iOS Safari で許可ダイアログを出すための開始ボタン
+document.getElementById("startBtn").addEventListener("click", async () => {
+  try {
+    // カメラ開始（ここで getUserMedia が呼ばれる）
+    await camera.start();
 
+    // iOS Safari では video.play() が必須
+    await video.play();
+
+    console.log("Camera started");
+  } catch (e) {
+    alert("カメラが使用できません。Safari の設定でカメラ許可を確認してください。");
+    console.error(e);
+  }
+});
 
 // 顔認証 → rPPG 抽出
 function onFaceResults(results) {
@@ -78,10 +90,9 @@ function onFaceResults(results) {
   }
 }
 
-
-// 心拍（FFT）
+// 心拍（FFT）※簡易版
 function calcHR(buffer) {
-  return Math.floor(60 + Math.random() * 20); // 簡易版
+  return Math.floor(60 + Math.random() * 20);
 }
 
 // HRV
@@ -93,7 +104,6 @@ function calcHRV(buffer) {
 function calcSNR(buffer) {
   return Math.random() * 3 + 1;
 }
-
 
 // 疲労スコア
 function calcFatigueScore(hr, hrv, snr, face, blink) {
@@ -109,7 +119,6 @@ function calcFatigueScore(hr, hrv, snr, face, blink) {
     blink * 0.1
   );
 }
-
 
 // UI 更新
 function updateUI(score, hr, hrv, snr) {
