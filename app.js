@@ -28,6 +28,8 @@ const camera = new CameraUtils.Camera(video, {
 });
 camera.start();
 
+video.play();   // ← ★ここに追加（iOS Safari で必須）
+
 
 // 顔認証 → rPPG 抽出
 function onFaceResults(results) {
