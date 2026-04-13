@@ -166,12 +166,18 @@
     ctx.drawImage(video, 0, 0, w, h);
 
     const size = 32;
-    const eyeY = Math.floor(h * 0.38);
+    const eyeY = Math.floor(h * 0.45);
 const sx = Math.floor(w / 2 - size / 2);
 const sy = Math.max(0, Math.floor(eyeY - size / 2));  // ← canvas外防止
 
+let img;
+try {
+  img = ctx.getImageData(sx, sy, size, size).data;
+} catch (e) {
+  return;
+}
 
-    const img = ctx.getImageData(sx, sy, size, size).data;
+
 
     let r = 0, g = 0, b = 0, c = 0;
     for (let i = 0; i < img.length; i += 4) {
