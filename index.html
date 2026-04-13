@@ -2,8 +2,19 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8">
-  <title>疲労度チェック rPPG（目ガイド版）</title>
+  <title>目ガイド版 rPPG</title>
   <meta name="viewport" content="width=device-width,initial-scale=1">
+
+  <style>
+    body { background:#111; color:#eee; text-align:center; margin:0; }
+    video, canvas {
+      width:260px;
+      transform:scaleX(-1);
+      border-radius:8px;
+    }
+    button { margin-top:10px; padding:10px 20px; }
+  </style>
+
   <script type="module">
     import {
       FaceLandmarker,
@@ -15,18 +26,14 @@
     let running = false;
 
     async function initFaceLandmarker() {
-      const vision = await FilesetResolver.forVisionTasks(
-        "./wasm"
-      );
+      const vision = await FilesetResolver.forVisionTasks("./wasm");
 
       landmarker = await FaceLandmarker.createFromOptions(vision, {
         baseOptions: {
           modelAssetPath: "./wasm/face_landmarker.task"
         },
         runningMode: "VIDEO",
-        numFaces: 1,
-        outputFaceBlendshapes: false,
-        outputFacialTransformationMatrixes: false
+        numFaces: 1
       });
     }
 
@@ -50,9 +57,9 @@
       });
     }
 
-    function drawEye(points, color) {
+    function drawEye(points) {
       ctx.beginPath();
-      ctx.strokeStyle = color;
+      ctx.strokeStyle = "#1e88e5";
       ctx.lineWidth = 2;
 
       const p0 = points[0];
@@ -75,19 +82,14 @@
       const now = performance.now();
       const result = await landmarker.detectForVideo(video, now);
 
-      if (result.faceLandmarks && result.faceLandmarks.length > 0) {
+      if (result.faceLandmarks?.length > 0) {
         const lm = result.faceLandmarks[0];
 
-        // 左目（MediaPipe のランドマーク index）
-        const leftEyeIdx = [33, 7, 163, 144, 145, 153, 154, 155, 133];
-        const leftEye = leftEyeIdx.map(i => lm[i]);
+        const leftIdx = [33,7,163,144,145,153,154,155,133];
+        const rightIdx = [263,249,390,373,374,380,381,382,362];
 
-        // 右目
-        const rightEyeIdx = [263, 249, 390, 373, 374, 380, 381, 382, 362];
-        const rightEye = rightEyeIdx.map(i => lm[i]);
-
-        drawEye(leftEye, "#1e88e5");
-        drawEye(rightEye, "#1e88e5");
+        drawEye(leftIdx.map(i => lm[i]));
+        drawEye(rightIdx.map(i => lm[i]));
       }
 
       requestAnimationFrame(detectLoop);
@@ -105,17 +107,10 @@
 
     window.start = start;
   </script>
-
-  <style>
-    body { background:#111; color:#eee; text-align:center; margin:0; }
-    video { width:260px; transform:scaleX(-1); border-radius:8px; }
-    canvas { width:260px; transform:scaleX(-1); border-radius:8px; }
-    button { margin-top:10px; padding:10px 20px; }
-  </style>
 </head>
 
 <body>
-  <h2>疲労度チェック（目の輪郭ガイド版）</h2>
+  <h2>目の輪郭ガイド版</h2>
   <button onclick="start()">開始</button><br>
 
   <video id="video" autoplay playsinline></video>
