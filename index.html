@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8">
-  <title>疲労度チェック rPPG PWA（目線ズレ対応）</title>
+  <title>疲労度チェック rPPG PWA（肉体労働特化）</title>
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <link rel="manifest" href="manifest.json">
   <meta name="theme-color" content="#111111">
@@ -55,10 +55,11 @@
     #progressBar {
       width: 0%;
       height: 100%;
-      background: #1e88e5;
+      background: #1e88e5; /* ← 顔ズレ時に赤へ変更 */
       transition: width 0.3s linear, background 0.2s linear;
     }
 
+    /* 顔ズレ警告 */
     #faceWarning {
       color:#ff5252;
       font-weight:bold;
@@ -72,6 +73,7 @@
     .label { color:#aaa; font-size:12px; }
     .value { font-size:18px; font-weight:bold; margin-bottom:4px; }
 
+    /* レベル色分け */
     .level-safe { color:#4caf50; }
     .level-normal { color:#8bc34a; }
     .level-caution { color:#ffeb3b; }
@@ -82,21 +84,25 @@
   </style>
 </head>
 <body>
-<header>疲労度チェック rPPG（目線ズレ対応）</header>
+<header>疲労度チェック rPPG（肉体労働特化）</header>
 <main>
-  <p>目線をガイド線に合わせてください（20秒）。</p>
+  <p>顔を枠に合わせ、目をガイド線に合わせてください（20秒）。</p>
   <button id="startBtn">測定開始</button><br>
 
   <video id="video" autoplay playsinline></video>
   <canvas id="canvas" width="240" height="180"></canvas>
 
+  <!-- 顔枠＋目ガイド線 -->
   <div id="faceGuide">
     <div id="eyeLine"></div>
   </div>
 
   <div id="status"></div>
+
+  <!-- 顔ズレ警告 -->
   <div id="faceWarning"></div>
 
+  <!-- 棒ゲージ -->
   <div id="progressContainer">
     <div id="progressBar"></div>
   </div>
@@ -140,26 +146,28 @@
   let baseBrightness = null;
   let baseSamples = [];
   let running = false;
-  let eyeOut = false;
+  let faceOut = false;
   let validSeconds = 0;
 
   function logStatus(msg) { statusEl.textContent = msg; }
   function logResults(msg) { resultsEl.textContent = msg; }
-    function captureFrame() {
-    if (!running) return;
 
+  async function initCamera() {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: "user", frameRate: { ideal: FPS } },
+      audio: false
+    });
+    video.srcObject = stream;
+  }
+  function captureFrame() {
+    if (!running) return;
     const w = canvas.width;
     const h = canvas.height;
-
     ctx.drawImage(video, 0, 0, w, h);
 
     const size = 32;
-
-    /* ★ 目線判定用 ROI（eyeLine の高さ） */
-    const eyeY = Math.floor(h * 0.38);
     const sx = Math.floor(w / 2 - size / 2);
-    const sy = Math.floor(eyeY - size / 2);
-
+    const sy = Math.floor(h / 2 - size / 2);
     const img = ctx.getImageData(sx, sy, size, size).data;
 
     let r = 0, g = 0, b = 0, c = 0;
@@ -169,8 +177,8 @@
       b += img[i + 2];
       c++;
     }
-
     const R = r / c, G = g / c, B = b / c;
+
     rgbSeries.push([R, G, B]);
 
     const brightness = (R + G + B) / 3;
@@ -184,26 +192,23 @@
       }
     }
 
-    /* --- 目線ズレ判定 --- */
-    eyeOut = false;
-
+    /* --- 顔ズレ判定 --- */
+    faceOut = false;
     if (baseBrightness) {
       const diff = Math.abs(brightness - baseBrightness);
-      eyeOut = diff > 25;
+      faceOut = diff > 25;
 
-      if (eyeOut) {
-        faceWarning.textContent = "目線が外れています";
-        progressBar.style.background = "#ff5252";  /* 赤 */
+      if (faceOut) {
+        faceWarning.textContent = "顔が枠から外れています";
+        progressBar.style.background = "#ff5252";  /* ← 顔ズレ中は赤 */
       } else {
         faceWarning.textContent = "";
-        progressBar.style.background = "#1e88e5";  /* 青 */
+        progressBar.style.background = "#1e88e5";  /* ← 顔が戻ったら青 */
       }
     }
   }
 
-  function mean(arr) {
-    return arr.reduce((a, b) => a + b, 0) / arr.length;
-  }
+  function mean(arr) { return arr.reduce((a, b) => a + b, 0) / arr.length; }
 
   function std(arr) {
     const m = mean(arr);
@@ -215,15 +220,11 @@
     const m = mean(sig);
     const x = sig.map(v => v - m);
     const y = [];
-
     for (let i = 0; i < n; i++) {
       let s = 0, c = 0;
       for (let k = -win; k <= win; k++) {
         const j = i + k;
-        if (j >= 0 && j < n) {
-          s += x[j];
-          c++;
-        }
+        if (j >= 0 && j < n) { s += x[j]; c++; }
       }
       y.push(s / c);
     }
@@ -237,20 +238,16 @@
     const b = rgbSeries.map(v => v[2]);
 
     const mr = mean(r), mg = mean(g), mb = mean(b);
-
     const X = [], Y = [];
     for (let i = 0; i < n; i++) {
       const nr = r[i] / mr;
       const ng = g[i] / mg;
       const nb = b[i] / mb;
-
       X.push(ng - nb);
       Y.push(-2 * nr + ng + nb);
     }
-
     const alpha = std(X) / (std(Y) || 1);
     const s = X.map((v, i) => v + alpha * Y[i]);
-
     return detrendAndSmooth(s, 3);
   }
 
@@ -274,31 +271,25 @@
 
     const df = fps / n;
     const minHz = 0.7, maxHz = 4.0;
-
     const minIndex = Math.floor(minHz / df);
     const maxIndex = Math.floor(maxHz / df);
 
     let maxVal = -1, maxIdx = minIndex;
     let sum = 0;
-
     for (let k = minIndex; k <= maxIndex; k++) {
       const v = mag[k];
-      if (v > maxVal) {
-        maxVal = v;
-        maxIdx = k;
-      }
+      if (v > maxVal) { maxVal = v; maxIdx = k; }
       sum += v;
     }
 
     const peakFreq = maxIdx * df;
     const hr = peakFreq * 60;
-
     const noiseMean = sum / (maxIndex - minIndex + 1);
     const snr = 10 * Math.log10((maxVal + 1e-6) / (noiseMean + 1e-6));
 
     return { hr, snr };
   }
-    function estimateHRV(signal, fps) {
+  function estimateHRV(signal, fps) {
     const peaks = [];
     for (let i = 1; i < signal.length - 1; i++) {
       if (signal[i] > signal[i - 1] && signal[i] > signal[i + 1]) peaks.push(i);
@@ -337,6 +328,8 @@
     return Math.max(0, Math.min(100, score));
   }
 
+  /* 肉体労働特化の割合
+     HR 30%, HRV 35%, まぶた 25%, SNR 5%, 顔色 5% */
   function fatigueScore(hr, snr, rmssd, eyelid) {
     const hrNorm = Math.max(0, Math.min(1, (hr - 50) / 50));
     const snrNorm = Math.max(0, Math.min(1, snr / 10));
@@ -430,7 +423,7 @@
     baseBrightness = null;
     baseSamples = [];
     validSeconds = 0;
-    eyeOut = false;
+    faceOut = false;
 
     fatigueEl.textContent = "--";
     levelEl.textContent = "--";
@@ -446,9 +439,8 @@
 
     document.getElementById("faceGuide").style.display = "block";
 
-    try {
-      await initCamera();
-    } catch (e) {
+    try { await initCamera(); }
+    catch (e) {
       logStatus("カメラが使えません（設定で Safari のカメラ許可を確認）。");
       running = false;
       startBtn.disabled = false;
@@ -460,13 +452,13 @@
 
     const countdown = setInterval(() => {
 
-      if (!eyeOut) {
+      if (!faceOut) {
         validSeconds++;
         const progress = (validSeconds / DURATION_SEC) * 100;
         progressBar.style.width = `${progress}%`;
         logStatus(`測定中… 有効時間 ${validSeconds} 秒 / 20 秒`);
       } else {
-        logStatus("目線が外れています（測定一時停止）");
+        logStatus("顔が枠から外れています（測定一時停止）");
       }
 
       if (validSeconds >= DURATION_SEC) {
