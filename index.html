@@ -59,6 +59,14 @@
       transition: width 0.3s linear;
     }
 
+    /* 顔ズレ警告 */
+    #faceWarning {
+      color:#ff5252;
+      font-weight:bold;
+      min-height:1.5em;
+      margin-top:5px;
+    }
+
     #results { margin-top:10px; font-size:14px; white-space:pre-line; }
     #scoreBox { margin-top:10px; padding:10px; border-radius:8px; background:#222; display:inline-block; min-width:260px; }
 
@@ -90,6 +98,9 @@
   </div>
 
   <div id="status"></div>
+
+  <!-- 顔ズレ警告 -->
+  <div id="faceWarning"></div>
 
   <!-- 棒ゲージ -->
   <div id="progressContainer">
@@ -128,9 +139,12 @@
   const workEl = document.getElementById('workStatus');
   const dangerEl = document.getElementById('dangerStatus');
   const progressBar = document.getElementById('progressBar');
+  const faceWarning = document.getElementById('faceWarning');
 
   let rgbSeries = [];
   let brightnessSeries = [];
+  let baseBrightness = null;
+  let baseSamples = [];
   let running = false;
 
   function logStatus(msg) { statusEl.textContent = msg; }
@@ -168,10 +182,28 @@
 
     const brightness = (R + G + B) / 3;
     brightnessSeries.push(brightness);
+
+    /* --- 基準明るさの収集（最初の1秒間） --- */
+    if (baseBrightness === null && baseSamples.length < FPS) {
+      baseSamples.push(brightness);
+      if (baseSamples.length === FPS) {
+        baseBrightness = mean(baseSamples);
+      }
+    }
+
+    /* --- 顔ズレ警告 --- */
+    if (baseBrightness) {
+      const diff = Math.abs(brightness - baseBrightness);
+      if (diff > 25) {
+        faceWarning.textContent = "顔が枠から外れています";
+      } else {
+        faceWarning.textContent = "";
+      }
+    }
   }
 
   function mean(arr) { return arr.reduce((a, b) => a + b, 0) / arr.length; }
-  function std(arr) {
+    function std(arr) {
     const m = mean(arr);
     return Math.sqrt(arr.reduce((s, x) => s + (x - m) ** 2, 0) / arr.length);
   }
@@ -290,7 +322,8 @@
     return Math.max(0, Math.min(100, score));
   }
 
-  // 肉体労働特化の割合
+  /* 肉体労働特化の割合
+     HR 30%, HRV 35%, まぶた 25%, SNR 5%, 顔色 5% */
   function fatigueScore(hr, snr, rmssd, eyelid) {
     const hrNorm = Math.max(0, Math.min(1, (hr - 50) / 50));
     const snrNorm = Math.max(0, Math.min(1, snr / 10));
@@ -331,20 +364,22 @@
   function dangerWorkStatus(score) {
     if (score >= 80) return "OK（安全）";
     if (score >= 60) return "OK（軽度疲労：重作業は注意）";
-    if (score >= 40) return "NG（注意：危険作業不可）";
-    if (score >= 20) return "NG（休憩推奨：作業不可）";
-    return "NG（危険：作業禁止）";
+    if (score >= 40) return "NG（危険作業不可）";
+    if (score >= 20) return "NG（休憩推奨）";
+    return "NG（作業禁止）";
   }
-
-  async function startMeasurement() {
+    async function startMeasurement() {
     if (running) return;
     running = true;
     rgbSeries = [];
     brightnessSeries = [];
+    baseBrightness = null;
+    baseSamples = [];
     fatigueEl.textContent = "--";
     levelEl.textContent = "--";
     workEl.textContent = "--";
     dangerEl.textContent = "--";
+    faceWarning.textContent = "";
     progressBar.style.width = "0%";
     logResults("");
     logStatus("カメラ起動中…");
@@ -380,6 +415,7 @@
       clearInterval(frameLoop);
       clearInterval(countdown);
       document.getElementById("faceGuide").style.display = "none";
+      faceWarning.textContent = "";
       logStatus("解析中…");
 
       if (rgbSeries.length < FPS * 10) {
