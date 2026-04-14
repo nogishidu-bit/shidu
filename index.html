@@ -6,7 +6,6 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#111111">
 
-  <!-- 外部CSS -->
   <link rel="stylesheet" href="style.css">
 </head>
 
@@ -17,13 +16,11 @@
   <p>目を上下2本のガイド線の間に合わせてください（20秒）。</p>
   <button id="startBtn">測定開始</button><br>
 
-  <!-- カメラ映像 + ガイド線 -->
   <div class="videoWrapper">
     <video id="video" autoplay playsinline></video>
-    <div id="eyeLineTop"></div>
-    <div id="eyeLineBottom"></div>
   </div>
 
+  <!-- ガイド線は canvas に描画するため HTML から削除 -->
   <canvas id="canvas" width="240" height="180"></canvas>
 
   <div id="status"></div>
@@ -50,8 +47,6 @@
   </div>
 </main>
 
-<!-- 外部JS -->
 <script src="app.js"></script>
-
 </body>
 </html>
