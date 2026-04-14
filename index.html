@@ -30,8 +30,8 @@
  　　 pointer-events: none;
 　　  z-index: 9999; /* ← 最重要 */
 　　}
-
-
+#eyeLineTop { top: 30%; }
+#eyeLineBottom { top: 38%; }
 
     /* 棒ゲージ */
     #progressContainer {
@@ -76,9 +76,9 @@
 
   <div style="position:relative; display:inline-block;">
   <video id="video" autoplay playsinline></video>
-  <div id="eyeLine"></div>
+  <div id="eyeLineTop"></div>
+  <div id="eyeLineBottom"></div>
 </div>
-
 
   <canvas id="canvas" width="240" height="180"></canvas>
 
@@ -152,7 +152,7 @@
     ctx.drawImage(video, 0, 0, w, h);
 
     const size = 28;
-const eyeY = Math.floor(h * 0.29);
+const eyeY = Math.floor(h * 0.34);  // 上下ガイド線の中央
 
 const sx = Math.floor(w / 2 - size / 2);
 const sy = Math.min(h - size, Math.max(0, Math.floor(eyeY - size / 2)));
@@ -164,20 +164,35 @@ try {
   return;
 }
 
-const brightness = (R + G + B) / 3;
-
-if (baseBrightness) {
-  const diff = Math.abs(brightness - baseBrightness);
-  eyeOut = diff > 18;
-
-  if (eyeOut) {
-    faceWarning.textContent = "目線が外れています";
-    progressBar.style.background = "#ff5252";
-  } else {
-    faceWarning.textContent = "";
-    progressBar.style.background = "#1e88e5";
-  }
+let r = 0, g = 0, b = 0, c = 0;
+for (let i = 0; i < img.length; i += 4) {
+  r += img[i];
+  g += img[i + 1];
+  b += img[i + 2];
+  c++;
 }
+const R = r / c, G = g / c, B = b / c;
+
+rgbSeries.push([R, G, B]);
+
+const brightness = (R + G + B) / 3;
+brightnessSeries.push(brightness);
+
+/* --- 上下ガイド線の帯から外れたら NG --- */
+const topLine = h * 0.30;
+const bottomLine = h * 0.38;
+
+eyeOut = !(eyeY >= topLine && eyeY <= bottomLine);
+
+if (eyeOut) {
+  faceWarning.textContent = "目線がガイド線から外れています";
+  progressBar.style.background = "#ff5252";
+} else {
+  faceWarning.textContent = "";
+  progressBar.style.background = "#1e88e5";
+}
+
+
 
   function mean(arr) { return arr.reduce((a, b) => a + b, 0) / arr.length; }
 
