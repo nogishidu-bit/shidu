@@ -15,6 +15,7 @@
   <p>目を上下2本のガイド線の間に合わせてください。</p>
 
   <div class="videoWrapper">
+    <!-- ★ video/canvas はここに1つだけ -->
     <video id="video" autoplay playsinline></video>
     <canvas id="canvas" width="240" height="180"></canvas>
   </div>
@@ -26,10 +27,9 @@
 <div id="measure-screen" class="screen">
   <header>測定中（20秒）</header>
 
+  <!-- ★ video/canvas はここには置かない（重複禁止） -->
   <div class="videoWrapper">
-    <!-- ★ video/canvas は start-screen と同じものを使う（ID重複なし） -->
-    <video id="video" autoplay playsinline></video>
-    <canvas id="canvas" width="240" height="180"></canvas>
+    <!-- 空の div。video/canvas は start-screen のものを使う -->
   </div>
 
   <div id="status"></div>
