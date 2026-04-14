@@ -151,56 +151,33 @@
     const h = canvas.height;
     ctx.drawImage(video, 0, 0, w, h);
 
-    const size = 40;  // 安定版
-    const eyeY = Math.floor(h * 0.32);  // iPhone SE3 最適
+    const size = 28;
+const eyeY = Math.floor(h * 0.29);
 
-    const sx = Math.floor(w / 2 - size / 2);
-    const sy = Math.min(h - size, Math.max(0, Math.floor(eyeY - size / 2)));
+const sx = Math.floor(w / 2 - size / 2);
+const sy = Math.min(h - size, Math.max(0, Math.floor(eyeY - size / 2)));
 
-    let img;
-    try {
-      img = ctx.getImageData(sx, sy, size, size).data;
-    } catch (e) {
-      return; // ROI が外れたフレームは無視
-    }
+let img;
+try {
+  img = ctx.getImageData(sx, sy, size, size).data;
+} catch (e) {
+  return;
+}
 
-    let r = 0, g = 0, b = 0, c = 0;
-    for (let i = 0; i < img.length; i += 4) {
-      r += img[i];
-      g += img[i + 1];
-      b += img[i + 2];
-      c++;
-    }
-    const R = r / c, G = g / c, B = b / c;
+const brightness = (R + G + B) / 3;
 
-    rgbSeries.push([R, G, B]);
+if (baseBrightness) {
+  const diff = Math.abs(brightness - baseBrightness);
+  eyeOut = diff > 18;
 
-    const brightness = (R + G + B) / 3;
-    brightnessSeries.push(brightness);
-
-    // 基準明るさ（最初の1秒）
-    if (baseBrightness === null && baseSamples.length < FPS) {
-      baseSamples.push(brightness);
-      if (baseSamples.length === FPS) {
-        baseBrightness = mean(baseSamples);
-      }
-    }
-
-    /* --- 目線ズレ判定 --- */
-    eyeOut = false;
-    if (baseBrightness) {
-      const diff = Math.abs(brightness - baseBrightness);
-      eyeOut = diff > 35;  // 安定版
-
-      if (eyeOut) {
-        faceWarning.textContent = "目線が外れています";
-        progressBar.style.background = "#ff5252";
-      } else {
-        faceWarning.textContent = "";
-        progressBar.style.background = "#1e88e5";
-      }
-    }
+  if (eyeOut) {
+    faceWarning.textContent = "目線が外れています";
+    progressBar.style.background = "#ff5252";
+  } else {
+    faceWarning.textContent = "";
+    progressBar.style.background = "#1e88e5";
   }
+}
 
   function mean(arr) { return arr.reduce((a, b) => a + b, 0) / arr.length; }
 
