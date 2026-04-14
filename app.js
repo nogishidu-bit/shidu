@@ -2,20 +2,33 @@
 const FPS = 30;
 const DURATION_SEC = 20;
 
-/* 要素取得 */
+/* 画面切り替え */
+const startScreen = document.getElementById("start-screen");
+const measureScreen = document.getElementById("measure-screen");
+const resultScreen = document.getElementById("result-screen");
+
+/* 要素取得（待機画面） */
 const video = document.getElementById("video");
 const canvas = document.getElementById("canvas");
 const ctx = canvas.getContext("2d");
 
+/* 要素取得（測定画面） */
+const video2 = document.getElementById("video2");
+const canvas2 = document.getElementById("canvas2");
+const ctx2 = canvas2.getContext("2d");
+
 const startBtn = document.getElementById("startBtn");
+const retryBtn = document.getElementById("retryBtn");
+
 const statusEl = document.getElementById("status");
-const resultsEl = document.getElementById("results");
+const faceWarning = document.getElementById("faceWarning");
+const progressBar = document.getElementById("progressBar");
+
 const fatigueEl = document.getElementById("fatigueScore");
 const levelEl = document.getElementById("fatigueLevel");
 const workEl = document.getElementById("workStatus");
 const dangerEl = document.getElementById("dangerStatus");
-const progressBar = document.getElementById("progressBar");
-const faceWarning = document.getElementById("faceWarning");
+const resultsEl = document.getElementById("results");
 
 /* 状態管理 */
 let rgbSeries = [];
@@ -26,28 +39,29 @@ let running = false;
 let eyeOut = false;
 let validSeconds = 0;
 
-/* 表示用 */
-function logStatus(msg) { statusEl.textContent = msg; }
-function logResults(msg) { resultsEl.textContent = msg; }
+/* 画面切り替え関数 */
+function showScreen(screen) {
+  startScreen.classList.remove("active");
+  measureScreen.classList.remove("active");
+  resultScreen.classList.remove("active");
+
+  screen.classList.add("active");
+}
 
 /* カメラ起動 */
-async function initCamera() {
+async function initCamera(videoElement) {
   const stream = await navigator.mediaDevices.getUserMedia({
     video: { facingMode: "user", frameRate: { ideal: FPS } },
     audio: false
   });
-  video.srcObject = stream;
+  videoElement.srcObject = stream;
 }
 
 /* ROI + ガイド線 + eyeOut 判定（canvas 内で完結） */
-function captureFrame() {
-  if (!running) return;
-  if (video.readyState < 2) return;
-
+function processFrame(ctx, video, canvas) {
   const w = canvas.width;
   const h = canvas.height;
 
-  /* --- video を canvas に描画 --- */
   ctx.drawImage(video, 0, 0, w, h);
 
   /* --- ガイド線（canvas に描画）--- */
@@ -67,23 +81,21 @@ function captureFrame() {
   ctx.lineTo(w, bottomLinePx);
   ctx.stroke();
 
-  /* --- ROI の中心をガイド線中央に合わせる --- */
+  /* --- ROI --- */
   const size = 28;
   const eyeY = Math.floor((topLinePx + bottomLinePx) / 2);
 
   const sx = Math.floor(w / 2 - size / 2);
   const sy = Math.min(h - size, Math.max(0, Math.floor(eyeY - size / 2)));
 
-  /* --- ROI の赤枠（デバッグ用）--- */
   ctx.strokeStyle = "red";
   ctx.strokeRect(sx, sy, size, size);
 
-  /* --- ROI の画像データ取得 --- */
   let img;
   try {
     img = ctx.getImageData(sx, sy, size, size).data;
   } catch (e) {
-    return;
+    return false;
   }
 
   /* --- RGB 平均値 --- */
@@ -100,7 +112,7 @@ function captureFrame() {
   rgbSeries.push([R, G, B]);
   brightnessSeries.push(brightness);
 
-  /* --- 基準明るさ（最初の1秒） --- */
+  /* --- 基準明るさ --- */
   if (baseBrightness === null && baseSamples.length < FPS) {
     baseSamples.push(brightness);
     if (baseSamples.length === FPS) {
@@ -108,10 +120,10 @@ function captureFrame() {
     }
   }
 
-  /* --- ROI の中心（canvas 座標）--- */
+  /* --- ROI 中心 --- */
   const roiCenterY = sy + size / 2;
 
-  /* --- ガイド線帯に入っているか？ --- */
+  /* --- ガイド線帯判定 --- */
   const inBand = (roiCenterY >= topLinePx && roiCenterY <= bottomLinePx);
 
   /* --- 明るさ差分 --- */
@@ -121,16 +133,7 @@ function captureFrame() {
     diffOK = diff < 18;
   }
 
-  /* --- 最終判定 --- */
-  eyeOut = !(inBand && diffOK);
-
-  if (eyeOut) {
-    faceWarning.textContent = "目線がガイド線から外れています";
-    progressBar.style.background = "#ff5252";
-  } else {
-    faceWarning.textContent = "";
-    progressBar.style.background = "#1e88e5";
-  }
+  return inBand && diffOK;
 }
 
 /* --- 数学系ユーティリティ --- */
@@ -276,45 +279,11 @@ function fatigueScore(hr, snr, rmssd, eyelid) {
   return Math.round((1 - fatigue) * 100);
 }
 
-/* レベル表示 */
-function fatigueLevel(score) {
-  levelEl.className = "";
-  if (score >= 80) { levelEl.classList.add("level-safe"); return "レベル5：最良"; }
-  if (score >= 60) { levelEl.classList.add("level-normal"); return "レベル4：良好"; }
-  if (score >= 40) { levelEl.classList.add("level-caution"); return "レベル3：注意"; }
-  if (score >= 20) { levelEl.classList.add("level-warning"); return "レベル2：要警戒"; }
-  levelEl.classList.add("level-danger");
-  return "レベル1：危険";
-}
-
-function fatigueWorkStatus(score) {
-  if (score >= 80) return "作業可（安全）";
-  if (score >= 60) return "作業可（軽度疲労）";
-  if (score >= 40) return "注意（要観察）";
-  if (score >= 20) return "作業不可（休憩推奨）";
-  return "作業禁止（危険）";
-}
-
-function dangerWorkStatus(score) {
-  if (score >= 80) return "OK（安全）";
-  if (score >= 60) return "OK（軽度疲労）";
-  if (score >= 40) return "NG（危険作業不可）";
-  if (score >= 20) return "NG（休憩推奨）";
-  return "NG（作業禁止）";
-}
-
 /* 測定終了 */
 function finishMeasurement() {
   running = false;
-  faceWarning.textContent = "";
-  logStatus("解析中…");
 
-  if (rgbSeries.length < FPS * 10) {
-    logStatus("データ不足。もう一度測定してください。");
-    startBtn.disabled = false;
-    progressBar.style.width = "0%";
-    return;
-  }
+  showScreen(resultScreen);
 
   const sig = pos(rgbSeries);
   const { hr, snr } = fftHR(sig, FPS);
@@ -333,18 +302,12 @@ function finishMeasurement() {
   txt += rmssd ? `HRV(RMSSD): ${rmssd.toFixed(1)} ms\n` : `HRV(RMSSD): 推定不可\n`;
   txt += `まぶたスコア: ${eyelid.toFixed(1)} / 100\n`;
   txt += `※参考値（医療用途では使用不可）`;
-  logResults(txt);
-
-  logStatus("測定完了。再測定できます。");
-  startBtn.disabled = false;
-  progressBar.style.width = "0%";
-  progressBar.style.background = "#1e88e5";
+  resultsEl.textContent = txt;
 }
 
 /* 測定開始 */
 async function startMeasurement() {
-  if (running) return;
-  running = true;
+  showScreen(measureScreen);
 
   rgbSeries = [];
   brightnessSeries = [];
@@ -353,38 +316,42 @@ async function startMeasurement() {
   validSeconds = 0;
   eyeOut = false;
 
-  fatigueEl.textContent = "--";
-  levelEl.textContent = "--";
-  workEl.textContent = "--";
-  dangerEl.textContent = "--";
-  faceWarning.textContent = "";
   progressBar.style.width = "0%";
   progressBar.style.background = "#1e88e5";
+  faceWarning.textContent = "";
+  statusEl.textContent = "カメラ起動中…";
 
-  logResults("");
-  logStatus("カメラ起動中…");
-  startBtn.disabled = true;
+  await initCamera(video2);
 
-  try {
-    await initCamera();
-  } catch (e) {
-    logStatus("カメラが使えません（Safari の設定で許可を確認）。");
-    running = false;
-    startBtn.disabled = false;
-    return;
-  }
+  running = true;
 
-  const frameLoop = setInterval(captureFrame, 1000 / FPS);
+  const frameLoop = setInterval(() => {
+    if (!running) return clearInterval(frameLoop);
+
+    const ok = processFrame(ctx2, video2, canvas2);
+
+    if (!ok) {
+      eyeOut = true;
+      faceWarning.textContent = "目線がガイド線から外れています";
+      progressBar.style.background = "#ff5252";
+      statusEl.textContent = "測定一時停止中…";
+      return;
+    }
+
+    eyeOut = false;
+    faceWarning.textContent = "";
+    progressBar.style.background = "#1e88e5";
+
+  }, 1000 / FPS);
 
   const countdown = setInterval(() => {
+    if (!running) return clearInterval(countdown);
 
     if (!eyeOut) {
       validSeconds++;
       const progress = (validSeconds / DURATION_SEC) * 100;
       progressBar.style.width = `${progress}%`;
-      logStatus(`測定中… 有効時間 ${validSeconds} 秒 / 20 秒`);
-    } else {
-      logStatus("目線がガイド線から外れています（測定一時停止）");
+      statusEl.textContent = `測定中… 有効時間 ${validSeconds} 秒 / 20 秒`;
     }
 
     if (validSeconds >= DURATION_SEC) {
@@ -396,6 +363,8 @@ async function startMeasurement() {
   }, 1000);
 }
 
-startBtn.addEventListener("click", () => {
-  if (!running) startMeasurement();
+/* ボタン */
+startBtn.addEventListener("click", startMeasurement);
+retryBtn.addEventListener("click", () => {
+  showScreen(startScreen);
 });
