@@ -1,4 +1,4 @@
-/body {
+body {
   margin: 0;
   font-family: system-ui, sans-serif;
   background: #111;
@@ -13,8 +13,13 @@ header {
   font-weight: bold;
 }
 
-main {
+.screen {
+  display: none;
   padding: 10px;
+}
+
+.screen.active {
+  display: block;
 }
 
 .videoWrapper {
@@ -30,7 +35,18 @@ video {
   margin-top: 8px;
 }
 
-#startBtn {
+canvas {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 260px;
+  max-width: 80vw;
+  height: auto;
+  border-radius: 8px;
+  pointer-events: none;
+}
+
+#startBtn, #retryBtn {
   padding: 10px 20px;
   font-size: 16px;
   margin: 10px 0;
@@ -99,9 +115,3 @@ video {
 .level-caution { color: #ffeb3b; }
 .level-warning { color: #ff9800; }
 .level-danger { color: #f44336; }
-
-canvas {
-  display: block;
-  margin: 10px auto;
-  border-radius: 8px;
-}
