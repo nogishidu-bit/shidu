@@ -1,145 +1,381 @@
+/* 設定 */
+const FPS = 30;
+const DURATION_SEC = 20;
+
+/* 要素取得 */
 const video = document.getElementById("video");
+const canvas = document.getElementById("canvas");
+const ctx = canvas.getContext("2d");
 
-// rPPG バッファ
-let greenBuffer = [];
-const BUFFER_SIZE = 60;
+const startBtn = document.getElementById("startBtn");
+const statusEl = document.getElementById("status");
+const resultsEl = document.getElementById("results");
+const fatigueEl = document.getElementById("fatigueScore");
+const levelEl = document.getElementById("fatigueLevel");
+const workEl = document.getElementById("workStatus");
+const dangerEl = document.getElementById("dangerStatus");
+const progressBar = document.getElementById("progressBar");
+const faceWarning = document.getElementById("faceWarning");
 
-// MediaPipe FaceMesh
-const faceMesh = new FaceMesh.FaceMesh({
-  locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`
-});
+/* 状態管理 */
+let rgbSeries = [];
+let brightnessSeries = [];
+let baseBrightness = null;
+let baseSamples = [];
+let running = false;
+let eyeOut = false;
+let validSeconds = 0;
 
-faceMesh.setOptions({
-  maxNumFaces: 1,
-  refineLandmarks: true,
-  minDetectionConfidence: 0.5,
-  minTrackingConfidence: 0.5
-});
+/* 表示用 */
+function logStatus(msg) { statusEl.textContent = msg; }
+function logResults(msg) { resultsEl.textContent = msg; }
 
-faceMesh.onResults(onFaceResults);
-
-// ★ カメラ開始（iOS Safari で確実に許可ダイアログが出る）
-async function startCamera() {
+/* カメラ起動 */
+async function initCamera() {
   const stream = await navigator.mediaDevices.getUserMedia({
-    video: { facingMode: "user" },
+    video: { facingMode: "user", frameRate: { ideal: FPS } },
     audio: false
   });
-
   video.srcObject = stream;
-
-  // iOS Safari では必須
-  await video.play();
-
-  // MediaPipe にフレームを送るループ
-  requestAnimationFrame(processFrame);
 }
 
-async function processFrame() {
-  await faceMesh.send({ image: video });
-  requestAnimationFrame(processFrame);
-}
+/* ROI + eyeOut 判定（上下2本ガイド線対応） */
+function captureFrame() {
+  if (!running) return;
+  if (video.readyState < 2) return;
 
-// ★ ボタン押下でカメラ開始（iOS の必須条件）
-document.getElementById("startBtn").addEventListener("click", async () => {
+  const w = canvas.width;
+  const h = canvas.height;
+  ctx.drawImage(video, 0, 0, w, h);
+
+  /* --- ガイド線の実ピクセル位置 --- */
+  const topLinePx = h * 0.30;
+  const bottomLinePx = h * 0.38;
+
+  /* --- ROI の中心をガイド線中央に合わせる --- */
+  const size = 28;
+  const eyeY = Math.floor((topLinePx + bottomLinePx) / 2);
+
+  const sx = Math.floor(w / 2 - size / 2);
+  const sy = Math.min(h - size, Math.max(0, Math.floor(eyeY - size / 2)));
+
+  let img;
   try {
-    await startCamera();
+    img = ctx.getImageData(sx, sy, size, size).data;
   } catch (e) {
-    alert("カメラが使用できません。Safari の設定でカメラ許可を確認してください。");
-    console.error(e);
+    return;
   }
+
+  /* --- RGB 平均値 --- */
+  let r = 0, g = 0, b = 0, c = 0;
+  for (let i = 0; i < img.length; i += 4) {
+    r += img[i];
+    g += img[i + 1];
+    b += img[i + 2];
+    c++;
+  }
+  const R = r / c, G = g / c, B = b / c;
+  const brightness = (R + G + B) / 3;
+
+  rgbSeries.push([R, G, B]);
+  brightnessSeries.push(brightness);
+
+  /* --- 基準明るさ（最初の1秒） --- */
+  if (baseBrightness === null && baseSamples.length < FPS) {
+    baseSamples.push(brightness);
+    if (baseSamples.length === FPS) {
+      baseBrightness = mean(baseSamples);
+    }
+  }
+
+  /* --- ROI の中心（実ピクセル） --- */
+  const roiCenterY = sy + size / 2;
+
+  /* --- ガイド線帯に入っているか？ --- */
+  const inBand = (roiCenterY >= topLinePx && roiCenterY <= bottomLinePx);
+
+  /* --- 明るさ差分 --- */
+  let diffOK = true;
+  if (baseBrightness) {
+    const diff = Math.abs(brightness - baseBrightness);
+    diffOK = diff < 18;
+  }
+
+  /* --- 最終判定 --- */
+  eyeOut = !(inBand && diffOK);
+
+  if (eyeOut) {
+    faceWarning.textContent = "目線がガイド線から外れています";
+    progressBar.style.background = "#ff5252";
+  } else {
+    faceWarning.textContent = "";
+    progressBar.style.background = "#1e88e5";
+  }
+}
+
+/* --- 数学系ユーティリティ --- */
+function mean(arr) { return arr.reduce((a, b) => a + b, 0) / arr.length; }
+
+function std(arr) {
+  const m = mean(arr);
+  return Math.sqrt(arr.reduce((s, x) => s + (x - m) ** 2, 0) / arr.length);
+}
+
+function detrendAndSmooth(sig, win = 5) {
+  const n = sig.length;
+  const m = mean(sig);
+  const x = sig.map(v => v - m);
+  const y = [];
+  for (let i = 0; i < n; i++) {
+    let s = 0, c = 0;
+    for (let k = -win; k <= win; k++) {
+      const j = i + k;
+      if (j >= 0 && j < n) { s += x[j]; c++; }
+    }
+    y.push(s / c);
+  }
+  return y;
+}
+
+/* POS法 */
+function pos(rgbSeries) {
+  const n = rgbSeries.length;
+  const r = rgbSeries.map(v => v[0]);
+  const g = rgbSeries.map(v => v[1]);
+  const b = rgbSeries.map(v => v[2]);
+
+  const mr = mean(r), mg = mean(g), mb = mean(b);
+  const X = [], Y = [];
+  for (let i = 0; i < n; i++) {
+    const nr = r[i] / mr;
+    const ng = g[i] / mg;
+    const nb = b[i] / mb;
+    X.push(ng - nb);
+    Y.push(-2 * nr + ng + nb);
+  }
+  const alpha = std(X) / (std(Y) || 1);
+  const s = X.map((v, i) => v + alpha * Y[i]);
+  return detrendAndSmooth(s, 3);
+}
+
+/* FFT → HR/SNR */
+function fftHR(signal, fps) {
+  const n = signal.length;
+  const re = new Array(n).fill(0);
+  const im = new Array(n).fill(0);
+
+  for (let k = 0; k < n; k++) {
+    for (let t = 0; t < n; t++) {
+      const angle = -2 * Math.PI * k * t / n;
+      re[k] += signal[t] * Math.cos(angle);
+      im[k] += signal[t] * Math.sin(angle);
+    }
+  }
+
+  const mag = [];
+  for (let k = 0; k < n / 2; k++) {
+    mag.push(Math.sqrt(re[k] ** 2 + im[k] ** 2));
+  }
+
+  const df = fps / n;
+  const minHz = 0.7, maxHz = 4.0;
+  const minIndex = Math.floor(minHz / df);
+  const maxIndex = Math.floor(maxHz / df);
+
+  let maxVal = -1, maxIdx = minIndex;
+  let sum = 0;
+  for (let k = minIndex; k <= maxIndex; k++) {
+    const v = mag[k];
+    if (v > maxVal) { maxVal = v; maxIdx = k; }
+    sum += v;
+  }
+
+  const peakFreq = maxIdx * df;
+  const hr = peakFreq * 60;
+  const noiseMean = sum / (maxIndex - minIndex + 1);
+  const snr = 10 * Math.log10((maxVal + 1e-6) / (noiseMean + 1e-6));
+
+  return { hr, snr };
+}
+
+/* HRV（RMSSD） */
+function estimateHRV(signal, fps) {
+  const peaks = [];
+  for (let i = 1; i < signal.length - 1; i++) {
+    if (signal[i] > signal[i - 1] && signal[i] > signal[i + 1]) peaks.push(i);
+  }
+  if (peaks.length < 3) return null;
+
+  const rr = [];
+  for (let i = 0; i < peaks.length - 1; i++) {
+    rr.push((peaks[i + 1] - peaks[i]) / fps);
+  }
+  if (rr.length < 2) return null;
+
+  const diff2 = [];
+  for (let i = 0; i < rr.length - 1; i++) {
+    diff2.push((rr[i + 1] - rr[i]) ** 2);
+  }
+  return Math.sqrt(mean(diff2)) * 1000;
+}
+
+/* まぶたスコア */
+function eyelidScore(brightnessSeries) {
+  if (brightnessSeries.length < 10) return 50;
+
+  const minB = Math.min(...brightnessSeries);
+  const maxB = Math.max(...brightnessSeries);
+  const norm = brightnessSeries.map(v => (v - minB) / (maxB - minB + 1e-6));
+
+  const avgOpen = mean(norm);
+
+  let blinks = 0;
+  for (let i = 1; i < norm.length; i++) {
+    if (norm[i] < norm[i - 1] - 0.15) blinks++;
+  }
+
+  const blinkPenalty = Math.min(0.3, blinks / 20);
+  const score = (avgOpen - blinkPenalty) * 100;
+  return Math.max(0, Math.min(100, score));
+}
+
+/* 疲労スコア */
+function fatigueScore(hr, snr, rmssd, eyelid) {
+  const hrNorm = Math.max(0, Math.min(1, (hr - 50) / 50));
+  const snrNorm = Math.max(0, Math.min(1, snr / 10));
+  const rmssdNorm = rmssd ? Math.max(0, Math.min(1, rmssd / 80)) : 0.5;
+  const eyeNorm = eyelid / 100;
+
+  const fatigue =
+    hrNorm * 0.30 +
+    (1 - rmssdNorm) * 0.35 +
+    (1 - eyeNorm) * 0.25 +
+    (1 - snrNorm) * 0.05 +
+    0.05;
+
+  return Math.round((1 - fatigue) * 100);
+}
+
+/* レベル表示 */
+function fatigueLevel(score) {
+  levelEl.className = "";
+  if (score >= 80) { levelEl.classList.add("level-safe"); return "レベル5：最良"; }
+  if (score >= 60) { levelEl.classList.add("level-normal"); return "レベル4：良好"; }
+  if (score >= 40) { levelEl.classList.add("level-caution"); return "レベル3：注意"; }
+  if (score >= 20) { levelEl.classList.add("level-warning"); return "レベル2：要警戒"; }
+  levelEl.classList.add("level-danger");
+  return "レベル1：危険";
+}
+
+function fatigueWorkStatus(score) {
+  if (score >= 80) return "作業可（安全）";
+  if (score >= 60) return "作業可（軽度疲労）";
+  if (score >= 40) return "注意（要観察）";
+  if (score >= 20) return "作業不可（休憩推奨）";
+  return "作業禁止（危険）";
+}
+
+function dangerWorkStatus(score) {
+  if (score >= 80) return "OK（安全）";
+  if (score >= 60) return "OK（軽度疲労）";
+  if (score >= 40) return "NG（危険作業不可）";
+  if (score >= 20) return "NG（休憩推奨）";
+  return "NG（作業禁止）";
+}
+
+/* 測定終了 */
+function finishMeasurement() {
+  running = false;
+  faceWarning.textContent = "";
+  logStatus("解析中…");
+
+  if (rgbSeries.length < FPS * 10) {
+    logStatus("データ不足。もう一度測定してください。");
+    startBtn.disabled = false;
+    progressBar.style.width = "0%";
+    return;
+  }
+
+  const sig = pos(rgbSeries);
+  const { hr, snr } = fftHR(sig, FPS);
+  const rmssd = estimateHRV(sig, FPS);
+  const eyelid = eyelidScore(brightnessSeries);
+  const score = fatigueScore(hr, snr, rmssd, eyelid);
+
+  fatigueEl.textContent = score;
+  levelEl.textContent = fatigueLevel(score);
+  workEl.textContent = fatigueWorkStatus(score);
+  dangerEl.textContent = dangerWorkStatus(score);
+
+  let txt = "";
+  txt += `推定HR: ${hr.toFixed(1)} bpm\n`;
+  txt += `SNR: ${snr.toFixed(1)} dB\n`;
+  txt += rmssd ? `HRV(RMSSD): ${rmssd.toFixed(1)} ms\n` : `HRV(RMSSD): 推定不可\n`;
+  txt += `まぶたスコア: ${eyelid.toFixed(1)} / 100\n`;
+  txt += `※参考値（医療用途では使用不可）`;
+  logResults(txt);
+
+  logStatus("測定完了。再測定できます。");
+  startBtn.disabled = false;
+  progressBar.style.width = "0%";
+  progressBar.style.background = "#1e88e5";
+}
+
+/* 測定開始 */
+async function startMeasurement() {
+  if (running) return;
+  running = true;
+
+  rgbSeries = [];
+  brightnessSeries = [];
+  baseBrightness = null;
+  baseSamples = [];
+  validSeconds = 0;
+  eyeOut = false;
+
+  fatigueEl.textContent = "--";
+  levelEl.textContent = "--";
+  workEl.textContent = "--";
+  dangerEl.textContent = "--";
+  faceWarning.textContent = "";
+  progressBar.style.width = "0%";
+  progressBar.style.background = "#1e88e5";
+
+  logResults("");
+  logStatus("カメラ起動中…");
+  startBtn.disabled = true;
+
+  try {
+    await initCamera();
+  } catch (e) {
+    logStatus("カメラが使えません（Safari の設定で許可を確認）。");
+    running = false;
+    startBtn.disabled = false;
+    return;
+  }
+
+  const frameLoop = setInterval(captureFrame, 1000 / FPS);
+
+  const countdown = setInterval(() => {
+
+    if (!eyeOut) {
+      validSeconds++;
+      const progress = (validSeconds / DURATION_SEC) * 100;
+      progressBar.style.width = `${progress}%`;
+      logStatus(`測定中… 有効時間 ${validSeconds} 秒 / 20 秒`);
+    } else {
+      logStatus("目線がガイド線から外れています（測定一時停止）");
+    }
+
+    if (validSeconds >= DURATION_SEC) {
+      clearInterval(countdown);
+      clearInterval(frameLoop);
+      finishMeasurement();
+    }
+
+  }, 1000);
+}
+
+startBtn.addEventListener("click", () => {
+  if (!running) startMeasurement();
 });
-
-// 顔認証 → rPPG 抽出
-function onFaceResults(results) {
-  if (!results.multiFaceLandmarks || results.multiFaceLandmarks.length === 0) return;
-
-  const lm = results.multiFaceLandmarks[0];
-
-  const pts = [lm[234], lm[454], lm[152], lm[10]];
-
-  const canvas = document.createElement("canvas");
-  canvas.width = video.videoWidth;
-  canvas.height = video.videoHeight;
-  const ctx = canvas.getContext("2d");
-  ctx.drawImage(video, 0, 0);
-
-  const xs = pts.map(p => p.x * canvas.width);
-  const ys = pts.map(p => p.y * canvas.height);
-
-  const minX = Math.min(...xs);
-  const minY = Math.min(...ys);
-  const w = Math.max(...xs) - minX;
-  const h = Math.max(...ys) - minY;
-
-  const data = ctx.getImageData(minX, minY, w, h).data;
-
-  let gSum = 0;
-  for (let i = 0; i < data.length; i += 4) {
-    gSum += data[i + 1];
-  }
-  const gAvg = gSum / (data.length / 4);
-
-  greenBuffer.push(gAvg);
-  if (greenBuffer.length > BUFFER_SIZE) greenBuffer.shift();
-
-  if (greenBuffer.length === BUFFER_SIZE) {
-    const hr = calcHR(greenBuffer);
-    const hrv = calcHRV(greenBuffer);
-    const snr = calcSNR(greenBuffer);
-
-    const score = calcFatigueScore(hr, hrv, snr, 50, 50);
-
-    updateUI(score, hr, hrv, snr);
-  }
-}
-
-// 心拍（簡易）
-function calcHR(buffer) {
-  return Math.floor(60 + Math.random() * 20);
-}
-
-function calcHRV(buffer) {
-  return Math.floor(20 + Math.random() * 40);
-}
-
-function calcSNR(buffer) {
-  return Math.random() * 3 + 1;
-}
-
-function calcFatigueScore(hr, hrv, snr, face, blink) {
-  const hrNorm = Math.max(0, Math.min(100, 100 - Math.abs(hr - 75)));
-  const hrvNorm = Math.max(0, Math.min(100, hrv));
-  const snrNorm = Math.max(0, Math.min(100, snr * 8));
-
-  return Math.round(
-    hrNorm * 0.2 +
-    hrvNorm * 0.4 +
-    snrNorm * 0.2 +
-    face * 0.1 +
-    blink * 0.1
-  );
-}
-
-function updateUI(score, hr, hrv, snr) {
-  const max = 283;
-  const offset = max - (max * score) / 100;
-
-  const fg = document.querySelector(".fg");
-  fg.style.strokeDashoffset = offset;
-
-  if (score >= 80) fg.style.stroke = "#00ff88";
-  else if (score >= 60) fg.style.stroke = "#ffaa00";
-  else if (score >= 40) fg.style.stroke = "#ff6600";
-  else fg.style.stroke = "#ff0033";
-
-  document.getElementById("scoreValue").textContent = score;
-  document.getElementById("hrValue").textContent = hr;
-  document.getElementById("hrvValue").textContent = hrv;
-  document.getElementById("snrValue").textContent = snr;
-
-  const label = document.getElementById("statusLabel");
-  if (score >= 80) label.textContent = "最良";
-  else if (score >= 60) label.textContent = "良好";
-  else if (score >= 40) label.textContent = "注意";
-  else label.textContent = "危険";
-}
