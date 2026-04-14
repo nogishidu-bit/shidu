@@ -153,67 +153,59 @@
     ctx.drawImage(video, 0, 0, w, h);
 
     /* --- ROI（上下2本ガイド線の中央に合わせる） --- */
-    const size = 28;                 // 目だけを取る最適サイズ
-    const eyeY = Math.floor(h * 0.34);  // 上30%・下38% の中央
+    const size = 28;
 
-    const sx = Math.floor(w / 2 - size / 2);
-    const sy = Math.min(h - size, Math.max(0, Math.floor(eyeY - size / 2)));
+// ガイド線の実際のピクセル位置
+const topLinePx = h * 0.30;
+const bottomLinePx = h * 0.38;
 
-    let img;
-    try {
-      img = ctx.getImageData(sx, sy, size, size).data;
-    } catch (e) {
-      return; // ROI が外れたフレームは無視
-    }
+// ROI の中心をガイド線の中央に合わせる
+const eyeY = Math.floor((topLinePx + bottomLinePx) / 2);
 
-    /* --- RGB 平均値 --- */
-    let r = 0, g = 0, b = 0, c = 0;
-    for (let i = 0; i < img.length; i += 4) {
-      r += img[i];
-      g += img[i + 1];
-      b += img[i + 2];
-      c++;
-    }
-    const R = r / c, G = g / c, B = b / c;
+const sx = Math.floor(w / 2 - size / 2);
+const sy = Math.min(h - size, Math.max(0, Math.floor(eyeY - size / 2)));
 
-    rgbSeries.push([R, G, B]);
+let img;
+try {
+  img = ctx.getImageData(sx, sy, size, size).data;
+} catch (e) {
+  return;
+}
 
-    const brightness = (R + G + B) / 3;
-    brightnessSeries.push(brightness);
+/* --- 明るさ計算 --- */
+let r = 0, g = 0, b = 0, c = 0;
+for (let i = 0; i < img.length; i += 4) {
+  r += img[i];
+  g += img[i + 1];
+  b += img[i + 2];
+  c++;
+}
+const R = r / c, G = g / c, B = b / c;
+const brightness = (R + G + B) / 3;
 
-    /* --- 基準明るさ（最初の1秒） --- */
-    if (baseBrightness === null && baseSamples.length < FPS) {
-      baseSamples.push(brightness);
-      if (baseSamples.length === FPS) {
-        baseBrightness = mean(baseSamples);
-      }
-    }
+/* --- ROI の中心位置（実ピクセル） --- */
+const roiCenterY = sy + size / 2;
 
-    /* --- 上下2本ガイド線の帯から外れたら NG --- */
-    const topLine = h * 0.30;
-    const bottomLine = h * 0.38;
+/* --- ガイド線帯に入っているか？ --- */
+const inBand = (roiCenterY >= topLinePx && roiCenterY <= bottomLinePx);
 
-    // ROI の中心 eyeY が帯の中にあるか？
-    const inBand = (eyeY >= topLine && eyeY <= bottomLine);
+/* --- 明るさ差分（微妙なズレ検出） --- */
+let diffOK = true;
+if (baseBrightness) {
+  const diff = Math.abs(brightness - baseBrightness);
+  diffOK = diff < 18;
+}
 
-    // 明るさ差分（微妙なズレ検出用）
-    let diffOK = true;
-    if (baseBrightness) {
-      const diff = Math.abs(brightness - baseBrightness);
-      diffOK = diff < 18;  // 目の上下移動に敏感に反応
-    }
+/* --- 最終判定 --- */
+eyeOut = !(inBand && diffOK);
 
-    // 最終判定：帯から外れた or 明るさがズレた → eyeOut
-    eyeOut = !(inBand && diffOK);
-
-    if (eyeOut) {
-      faceWarning.textContent = "目線がガイド線から外れています";
-      progressBar.style.background = "#ff5252";
-    } else {
-      faceWarning.textContent = "";
-      progressBar.style.background = "#1e88e5";
-    }
-  }
+if (eyeOut) {
+  faceWarning.textContent = "目線がガイド線から外れています";
+  progressBar.style.background = "#ff5252";
+} else {
+  faceWarning.textContent = "";
+  progressBar.style.background = "#1e88e5";
+}
 
   function mean(arr) { return arr.reduce((a, b) => a + b, 0) / arr.length; }
 
