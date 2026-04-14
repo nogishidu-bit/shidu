@@ -135,23 +135,27 @@
     });
     video.srcObject = stream;
   }
-  function captureFrame() {
+    function captureFrame() {
     if (!running) return;
+
+    // 黒フレーム対策（iPhone Safari）
+    if (video.readyState < 2) return;
 
     const w = canvas.width;
     const h = canvas.height;
     ctx.drawImage(video, 0, 0, w, h);
 
-    const size = 40;
-    const eyeY = Math.floor(h * 0.32);
+    const size = 40;  // 安定版
+    const eyeY = Math.floor(h * 0.32);  // iPhone SE3 最適
+
     const sx = Math.floor(w / 2 - size / 2);
-    const sy = Math.max(0, Math.floor(eyeY - size / 2));
+    const sy = Math.min(h - size, Math.max(0, Math.floor(eyeY - size / 2)));
 
     let img;
     try {
       img = ctx.getImageData(sx, sy, size, size).data;
     } catch (e) {
-      return;
+      return; // ROI が外れたフレームは無視
     }
 
     let r = 0, g = 0, b = 0, c = 0;
@@ -168,6 +172,7 @@
     const brightness = (R + G + B) / 3;
     brightnessSeries.push(brightness);
 
+    // 基準明るさ（最初の1秒）
     if (baseBrightness === null && baseSamples.length < FPS) {
       baseSamples.push(brightness);
       if (baseSamples.length === FPS) {
@@ -179,7 +184,7 @@
     eyeOut = false;
     if (baseBrightness) {
       const diff = Math.abs(brightness - baseBrightness);
-      eyeOut = diff > 35;
+      eyeOut = diff > 35;  // 安定版
 
       if (eyeOut) {
         faceWarning.textContent = "目線が外れています";
@@ -311,6 +316,51 @@
     const score = (avgOpen - blinkPenalty) * 100;
     return Math.max(0, Math.min(100, score));
   }
+    /* --- 疲労スコア計算 --- */
+  function fatigueScore(hr, snr, rmssd, eyelid) {
+    const hrNorm = Math.max(0, Math.min(1, (hr - 50) / 50));
+    const snrNorm = Math.max(0, Math.min(1, snr / 10));
+    const rmssdNorm = rmssd ? Math.max(0, Math.min(1, rmssd / 80)) : 0.5;
+    const eyeNorm = eyelid / 100;
+
+    const fatigue =
+      hrNorm * 0.30 +
+      (1 - rmssdNorm) * 0.35 +
+      (1 - eyeNorm) * 0.25 +
+      (1 - snrNorm) * 0.05 +
+      0.05;
+
+    return Math.round((1 - fatigue) * 100);
+  }
+
+  function fatigueLevel(score) {
+    levelEl.className = "";
+
+    if (score >= 80) { levelEl.classList.add("level-safe"); return "レベル5：最良（Safe）"; }
+    if (score >= 60) { levelEl.classList.add("level-normal"); return "レベル4：良好（Normal）"; }
+    if (score >= 40) { levelEl.classList.add("level-caution"); return "レベル3：注意（Caution）"; }
+    if (score >= 20) { levelEl.classList.add("level-warning"); return "レベル2：要警戒（Warning）"; }
+
+    levelEl.classList.add("level-danger");
+    return "レベル1：危険（Danger）";
+  }
+
+  function fatigueWorkStatus(score) {
+    if (score >= 80) return "作業可（安全）";
+    if (score >= 60) return "作業可（軽度疲労）";
+    if (score >= 40) return "注意（要観察）";
+    if (score >= 20) return "作業不可（休憩推奨）";
+    return "作業禁止（危険）";
+  }
+
+  function dangerWorkStatus(score) {
+    if (score >= 80) return "OK（安全）";
+    if (score >= 60) return "OK（軽度疲労：重作業は注意）";
+    if (score >= 40) return "NG（危険作業不可）";
+    if (score >= 20) return "NG（休憩推奨）";
+    return "NG（作業禁止）";
+  }
+
   /* --- 測定終了処理 --- */
   function finishMeasurement() {
     running = false;
@@ -407,8 +457,7 @@
   startBtn.addEventListener('click', () => {
     if (!running) startMeasurement();
   });
-
-  /* --- PWA Service Worker --- */
+    /* --- PWA Service Worker 登録 --- */
   if ('serviceWorker' in navigator) {
     window.addEventListener('load', () => {
       navigator.serviceWorker.register('service-worker.js');
