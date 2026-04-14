@@ -7,16 +7,12 @@ const startScreen = document.getElementById("start-screen");
 const measureScreen = document.getElementById("measure-screen");
 const resultScreen = document.getElementById("result-screen");
 
-/* 要素取得（待機画面） */
+/* 共通 video / canvas（1つだけ） */
 const video = document.getElementById("video");
 const canvas = document.getElementById("canvas");
 const ctx = canvas.getContext("2d");
 
-/* 要素取得（測定画面） */
-const video2 = document.getElementById("video2");
-const canvas2 = document.getElementById("canvas2");
-const ctx2 = canvas2.getContext("2d");
-
+/* UI 要素 */
 const startBtn = document.getElementById("startBtn");
 const retryBtn = document.getElementById("retryBtn");
 
@@ -39,32 +35,31 @@ let running = false;
 let eyeOut = false;
 let validSeconds = 0;
 
-/* 画面切り替え関数 */
+/* 画面切り替え */
 function showScreen(screen) {
   startScreen.classList.remove("active");
   measureScreen.classList.remove("active");
   resultScreen.classList.remove("active");
-
   screen.classList.add("active");
 }
 
 /* カメラ起動 */
-async function initCamera(videoElement) {
+async function initCamera() {
   const stream = await navigator.mediaDevices.getUserMedia({
     video: { facingMode: "user", frameRate: { ideal: FPS } },
     audio: false
   });
-  videoElement.srcObject = stream;
+  video.srcObject = stream;
 }
 
-/* ROI + ガイド線 + eyeOut 判定（canvas 内で完結） */
-function processFrame(ctx, video, canvas) {
+/* ROI + ガイド線 + eyeOut 判定 */
+function processFrame() {
   const w = canvas.width;
   const h = canvas.height;
 
   ctx.drawImage(video, 0, 0, w, h);
 
-  /* --- ガイド線（canvas に描画）--- */
+  /* ガイド線 */
   const topLinePx = h * 0.30;
   const bottomLinePx = h * 0.38;
 
@@ -81,7 +76,7 @@ function processFrame(ctx, video, canvas) {
   ctx.lineTo(w, bottomLinePx);
   ctx.stroke();
 
-  /* --- ROI --- */
+  /* ROI */
   const size = 28;
   const eyeY = Math.floor((topLinePx + bottomLinePx) / 2);
 
@@ -94,11 +89,11 @@ function processFrame(ctx, video, canvas) {
   let img;
   try {
     img = ctx.getImageData(sx, sy, size, size).data;
-  } catch (e) {
+  } catch {
     return false;
   }
 
-  /* --- RGB 平均値 --- */
+  /* RGB 平均 */
   let r = 0, g = 0, b = 0, c = 0;
   for (let i = 0; i < img.length; i += 4) {
     r += img[i];
@@ -112,38 +107,33 @@ function processFrame(ctx, video, canvas) {
   rgbSeries.push([R, G, B]);
   brightnessSeries.push(brightness);
 
-  /* --- 基準明るさ --- */
+  /* 基準明るさ */
   if (baseBrightness === null && baseSamples.length < FPS) {
     baseSamples.push(brightness);
-    if (baseSamples.length === FPS) {
-      baseBrightness = mean(baseSamples);
-    }
+    if (baseSamples.length === FPS) baseBrightness = mean(baseSamples);
   }
 
-  /* --- ROI 中心 --- */
+  /* ROI 中心 */
   const roiCenterY = sy + size / 2;
 
-  /* --- ガイド線帯判定 --- */
+  /* ガイド線帯判定 */
   const inBand = (roiCenterY >= topLinePx && roiCenterY <= bottomLinePx);
 
-  /* --- 明るさ差分 --- */
+  /* 明るさ差分 */
   let diffOK = true;
   if (baseBrightness) {
-    const diff = Math.abs(brightness - baseBrightness);
-    diffOK = diff < 18;
+    diffOK = Math.abs(brightness - baseBrightness) < 18;
   }
 
   return inBand && diffOK;
 }
 
-/* --- 数学系ユーティリティ --- */
+/* 数学系 */
 function mean(arr) { return arr.reduce((a, b) => a + b, 0) / arr.length; }
-
 function std(arr) {
   const m = mean(arr);
   return Math.sqrt(arr.reduce((s, x) => s + (x - m) ** 2, 0) / arr.length);
 }
-
 function detrendAndSmooth(sig, win = 5) {
   const n = sig.length;
   const m = mean(sig);
@@ -177,8 +167,7 @@ function pos(rgbSeries) {
     Y.push(-2 * nr + ng + nb);
   }
   const alpha = std(X) / (std(Y) || 1);
-  const s = X.map((v, i) => v + alpha * Y[i]);
-  return detrendAndSmooth(s, 3);
+  return detrendAndSmooth(X.map((v, i) => v + alpha * Y[i]), 3);
 }
 
 /* FFT → HR/SNR */
@@ -205,23 +194,20 @@ function fftHR(signal, fps) {
   const minIndex = Math.floor(minHz / df);
   const maxIndex = Math.floor(maxHz / df);
 
-  let maxVal = -1, maxIdx = minIndex;
-  let sum = 0;
+  let maxVal = -1, maxIdx = minIndex, sum = 0;
   for (let k = minIndex; k <= maxIndex; k++) {
     const v = mag[k];
     if (v > maxVal) { maxVal = v; maxIdx = k; }
     sum += v;
   }
 
-  const peakFreq = maxIdx * df;
-  const hr = peakFreq * 60;
-  const noiseMean = sum / (maxIndex - minIndex + 1);
-  const snr = 10 * Math.log10((maxVal + 1e-6) / (noiseMean + 1e-6));
-
-  return { hr, snr };
+  return {
+    hr: maxIdx * df * 60,
+    snr: 10 * Math.log10((maxVal + 1e-6) / (sum / (maxIndex - minIndex + 1) + 1e-6))
+  };
 }
 
-/* HRV（RMSSD） */
+/* HRV */
 function estimateHRV(signal, fps) {
   const peaks = [];
   for (let i = 1; i < signal.length - 1; i++) {
@@ -257,9 +243,7 @@ function eyelidScore(brightnessSeries) {
     if (norm[i] < norm[i - 1] - 0.15) blinks++;
   }
 
-  const blinkPenalty = Math.min(0.3, blinks / 20);
-  const score = (avgOpen - blinkPenalty) * 100;
-  return Math.max(0, Math.min(100, score));
+  return Math.max(0, Math.min(100, (avgOpen - Math.min(0.3, blinks / 20)) * 100));
 }
 
 /* 疲労スコア */
@@ -296,13 +280,12 @@ function finishMeasurement() {
   workEl.textContent = fatigueWorkStatus(score);
   dangerEl.textContent = dangerWorkStatus(score);
 
-  let txt = "";
-  txt += `推定HR: ${hr.toFixed(1)} bpm\n`;
-  txt += `SNR: ${snr.toFixed(1)} dB\n`;
-  txt += rmssd ? `HRV(RMSSD): ${rmssd.toFixed(1)} ms\n` : `HRV(RMSSD): 推定不可\n`;
-  txt += `まぶたスコア: ${eyelid.toFixed(1)} / 100\n`;
-  txt += `※参考値（医療用途では使用不可）`;
-  resultsEl.textContent = txt;
+  resultsEl.textContent =
+    `推定HR: ${hr.toFixed(1)} bpm\n` +
+    `SNR: ${snr.toFixed(1)} dB\n` +
+    (rmssd ? `HRV(RMSSD): ${rmssd.toFixed(1)} ms\n` : `HRV(RMSSD): 推定不可\n`) +
+    `まぶたスコア: ${eyelid.toFixed(1)} / 100\n` +
+    `※参考値（医療用途では使用不可）`;
 }
 
 /* 測定開始 */
@@ -321,14 +304,14 @@ async function startMeasurement() {
   faceWarning.textContent = "";
   statusEl.textContent = "カメラ起動中…";
 
-  await initCamera(video2);
+  await initCamera();
 
   running = true;
 
   const frameLoop = setInterval(() => {
     if (!running) return clearInterval(frameLoop);
 
-    const ok = processFrame(ctx2, video2, canvas2);
+    const ok = processFrame();
 
     if (!ok) {
       eyeOut = true;
@@ -349,8 +332,7 @@ async function startMeasurement() {
 
     if (!eyeOut) {
       validSeconds++;
-      const progress = (validSeconds / DURATION_SEC) * 100;
-      progressBar.style.width = `${progress}%`;
+      progressBar.style.width = `${(validSeconds / DURATION_SEC) * 100}%`;
       statusEl.textContent = `測定中… 有効時間 ${validSeconds} 秒 / 20 秒`;
     }
 
@@ -365,6 +347,4 @@ async function startMeasurement() {
 
 /* ボタン */
 startBtn.addEventListener("click", startMeasurement);
-retryBtn.addEventListener("click", () => {
-  showScreen(startScreen);
-});
+retryBtn.addEventListener("click", () => showScreen(startScreen));
