@@ -1,13 +1,3 @@
-/* 画面切り替え（必須） */
-.screen {
-  display: none;
-  padding: 10px;
-}
-
-.screen.active {
-  display: block;
-}
-
 body {
   margin: 0;
   font-family: system-ui, sans-serif;
@@ -16,11 +6,13 @@ body {
   text-align: center;
 }
 
-header {
-  padding: 10px 0;
-  background: #181818;
-  font-size: 18px;
-  font-weight: bold;
+.screen {
+  display: none;
+  padding: 10px;
+}
+
+.screen.active {
+  display: block;
 }
 
 .videoWrapper {
@@ -57,10 +49,6 @@ canvas {
   color: #fff;
 }
 
-#startBtn:disabled {
-  background: #555;
-}
-
 #status {
   font-size: 13px;
   color: #ccc;
@@ -90,29 +78,3 @@ canvas {
   background: #1e88e5;
   transition: width 0.3s linear, background 0.2s linear;
 }
-
-#scoreBox {
-  margin-top: 10px;
-  padding: 10px;
-  border-radius: 8px;
-  background: #222;
-  display: inline-block;
-  min-width: 260px;
-}
-
-.label {
-  color: #aaa;
-  font-size: 12px;
-}
-
-.value {
-  font-size: 18px;
-  font-weight: bold;
-  margin-bottom: 4px;
-}
-
-.level-safe { color: #4caf50; }
-.level-normal { color: #8bc34a; }
-.level-caution { color: #ffeb3b; }
-.level-warning { color: #ff9800; }
-.level-danger { color: #f44336; }
