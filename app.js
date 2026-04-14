@@ -48,9 +48,13 @@ function captureFrame() {
   const h = canvas.height;
   ctx.drawImage(video, 0, 0, w, h);
 
-  /* --- ガイド線の実ピクセル位置 --- */
-  const topLinePx = h * 0.30;
-  const bottomLinePx = h * 0.38;
+  /* --- video の実表示サイズを取得 --- */
+  const rect = video.getBoundingClientRect();
+  const videoHeight = rect.height;
+
+  /* --- CSS のガイド線位置（%）を px に変換し、canvas に補正 --- */
+  const topLinePx = (videoHeight * 0.30) * (h / videoHeight);
+  const bottomLinePx = (videoHeight * 0.38) * (h / videoHeight);
 
   /* --- ROI の中心をガイド線中央に合わせる --- */
   const size = 28;
