@@ -54,17 +54,24 @@ async function initCamera() {
   await videoMeasure.play();
 }
 
-/* Safariバグ回避：videoStart を完全停止 */
-function stopStartVideo() {
+/* ★ Safariバグ完全回避：videoStart を完全停止 + 再描画 */
+function disableStartVideo() {
   try {
     const stream = videoStart.srcObject;
-    if (stream) {
-      stream.getTracks().forEach(t => t.stop());
-    }
+    if (stream) stream.getTracks().forEach(t => t.stop());
   } catch {}
 
   videoStart.pause();
   videoStart.srcObject = null;
+  videoStart.removeAttribute("src");
+  videoStart.load();  // ← Safari で DOM ブロック解除に必須
+
+  // 親要素を強制再描画（Safariバグ回避）
+  const wrapper = videoStart.parentElement;
+  wrapper.style.display = "none";
+  setTimeout(() => {
+    wrapper.style.display = "inline-block";
+  }, 50);
 }
 
 /* 測定フレーム処理 */
@@ -135,10 +142,11 @@ function processMeasureFrame() {
 
 /* 測定開始 */
 async function startMeasurement() {
+  /* ★ まず start-screen を非表示にする */
   showScreen(measureScreen);
 
-  /* ★ Safariバグ回避：待機画面の video を完全停止 */
-  stopStartVideo();
+  /* ★ Safari DOM ブロック回避：videoStart を完全停止 */
+  disableStartVideo();
 
   rgbSeries = [];
   brightnessSeries = [];
