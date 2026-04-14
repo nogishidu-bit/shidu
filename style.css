@@ -1,6 +1,7 @@
 /* 画面切り替え（必須） */
 .screen {
   display: none;
+  padding: 10px;
 }
 
 .screen.active {
@@ -20,15 +21,6 @@ header {
   background: #181818;
   font-size: 18px;
   font-weight: bold;
-}
-
-.screen {
-  display: none;
-  padding: 10px;
-}
-
-.screen.active {
-  display: block;
 }
 
 .videoWrapper {
