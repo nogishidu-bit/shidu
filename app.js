@@ -7,12 +7,17 @@ const startScreen = document.getElementById("start-screen");
 const measureScreen = document.getElementById("measure-screen");
 const resultScreen = document.getElementById("result-screen");
 
-/* 共通 video / canvas（画面外に1つだけ） */
-const video = document.getElementById("video");
-const canvas = document.getElementById("canvas");
-const ctx = canvas.getContext("2d");
+/* 待機画面用 video/canvas */
+const videoStart = document.getElementById("videoStart");
+const canvasStart = document.getElementById("canvasStart");
+const ctxStart = canvasStart.getContext("2d");
 
-/* UI 要素 */
+/* 測定画面用 video/canvas */
+const videoMeasure = document.getElementById("videoMeasure");
+const canvasMeasure = document.getElementById("canvasMeasure");
+const ctxMeasure = canvasMeasure.getContext("2d");
+
+/* UI */
 const startBtn = document.getElementById("startBtn");
 const retryBtn = document.getElementById("retryBtn");
 
@@ -26,7 +31,7 @@ const workEl = document.getElementById("workStatus");
 const dangerEl = document.getElementById("dangerStatus");
 const resultsEl = document.getElementById("results");
 
-/* 状態管理 */
+/* 状態 */
 let rgbSeries = [];
 let brightnessSeries = [];
 let baseBrightness = null;
@@ -43,38 +48,40 @@ function showScreen(screen) {
   screen.classList.add("active");
 }
 
-/* カメラ起動 */
+/* カメラ起動（2つの video に同じストリームを流す） */
 async function initCamera() {
   const stream = await navigator.mediaDevices.getUserMedia({
     video: { facingMode: "user", frameRate: { ideal: FPS } },
     audio: false
   });
-  video.srcObject = stream;
+
+  videoStart.srcObject = stream;
+  videoMeasure.srcObject = stream;
 }
 
-/* ROI + ガイド線 + eyeOut 判定 */
-function processFrame() {
-  const w = canvas.width;
-  const h = canvas.height;
+/* ROI + ガイド線（測定画面側だけ） */
+function processMeasureFrame() {
+  const w = canvasMeasure.width;
+  const h = canvasMeasure.height;
 
-  ctx.drawImage(video, 0, 0, w, h);
+  ctxMeasure.drawImage(videoMeasure, 0, 0, w, h);
 
   /* ガイド線（広め） */
   const topLinePx = h * 0.25;
   const bottomLinePx = h * 0.45;
 
-  ctx.strokeStyle = "#00b0ff";
-  ctx.lineWidth = 2;
+  ctxMeasure.strokeStyle = "#00b0ff";
+  ctxMeasure.lineWidth = 2;
 
-  ctx.beginPath();
-  ctx.moveTo(0, topLinePx);
-  ctx.lineTo(w, topLinePx);
-  ctx.stroke();
+  ctxMeasure.beginPath();
+  ctxMeasure.moveTo(0, topLinePx);
+  ctxMeasure.lineTo(w, topLinePx);
+  ctxMeasure.stroke();
 
-  ctx.beginPath();
-  ctx.moveTo(0, bottomLinePx);
-  ctx.lineTo(w, bottomLinePx);
-  ctx.stroke();
+  ctxMeasure.beginPath();
+  ctxMeasure.moveTo(0, bottomLinePx);
+  ctxMeasure.lineTo(w, bottomLinePx);
+  ctxMeasure.stroke();
 
   /* ROI */
   const size = 28;
@@ -83,12 +90,12 @@ function processFrame() {
   const sx = Math.floor(w / 2 - size / 2);
   const sy = Math.min(h - size, Math.max(0, Math.floor(eyeY - size / 2)));
 
-  ctx.strokeStyle = "red";
-  ctx.strokeRect(sx, sy, size, size);
+  ctxMeasure.strokeStyle = "red";
+  ctxMeasure.strokeRect(sx, sy, size, size);
 
   let img;
   try {
-    img = ctx.getImageData(sx, sy, size, size).data;
+    img = ctxMeasure.getImageData(sx, sy, size, size).data;
   } catch {
     return false;
   }
@@ -128,10 +135,10 @@ function processFrame() {
   return inBand && diffOK;
 }
 
-/* 数学系 */
+/* 数学 */
 function mean(arr) { return arr.reduce((a, b) => a + b, 0) / arr.length; }
 
-/* 測定終了 */
+/* 測定終了（簡易版） */
 function finishMeasurement() {
   running = false;
   showScreen(resultScreen);
@@ -164,10 +171,11 @@ async function startMeasurement() {
 
   running = true;
 
+  /* 測定画面の描画ループ */
   const frameLoop = setInterval(() => {
     if (!running) return clearInterval(frameLoop);
 
-    const ok = processFrame();
+    const ok = processMeasureFrame();
 
     if (!ok) {
       eyeOut = true;
@@ -183,6 +191,7 @@ async function startMeasurement() {
 
   }, 1000 / FPS);
 
+  /* カウントダウン */
   const countdown = setInterval(() => {
     if (!running) return clearInterval(countdown);
 
