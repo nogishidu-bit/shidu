@@ -142,8 +142,8 @@
     const h = canvas.height;
     ctx.drawImage(video, 0, 0, w, h);
 
-    const size = 32;
-    const eyeY = Math.floor(h * 0.38);
+    const size = 40;
+    const eyeY = Math.floor(h * 0.32);
     const sx = Math.floor(w / 2 - size / 2);
     const sy = Math.max(0, Math.floor(eyeY - size / 2));
 
@@ -179,7 +179,7 @@
     eyeOut = false;
     if (baseBrightness) {
       const diff = Math.abs(brightness - baseBrightness);
-      eyeOut = diff > 25;
+      eyeOut = diff > 35;
 
       if (eyeOut) {
         faceWarning.textContent = "目線が外れています";
