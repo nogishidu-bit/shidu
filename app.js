@@ -2,17 +2,16 @@
 const FPS = 30;
 const DURATION_SEC = 20;
 
-/* 画面切り替え */
+/* 画面 */
 const startScreen = document.getElementById("start-screen");
 const measureScreen = document.getElementById("measure-screen");
 const resultScreen = document.getElementById("result-screen");
 
-/* 待機画面用 video/canvas */
+/* video/canvas */
 const videoStart = document.getElementById("videoStart");
 const canvasStart = document.getElementById("canvasStart");
 const ctxStart = canvasStart.getContext("2d");
 
-/* 測定画面用 video/canvas */
 const videoMeasure = document.getElementById("videoMeasure");
 const canvasMeasure = document.getElementById("canvasMeasure");
 const ctxMeasure = canvasMeasure.getContext("2d");
@@ -20,25 +19,18 @@ const ctxMeasure = canvasMeasure.getContext("2d");
 /* UI */
 const startBtn = document.getElementById("startBtn");
 const retryBtn = document.getElementById("retryBtn");
-
 const statusEl = document.getElementById("status");
 const faceWarning = document.getElementById("faceWarning");
 const progressBar = document.getElementById("progressBar");
 
-const fatigueEl = document.getElementById("fatigueScore");
-const levelEl = document.getElementById("fatigueLevel");
-const workEl = document.getElementById("workStatus");
-const dangerEl = document.getElementById("dangerStatus");
-const resultsEl = document.getElementById("results");
-
 /* 状態 */
-let rgbSeries = [];
-let brightnessSeries = [];
-let baseBrightness = null;
-let baseSamples = [];
 let running = false;
 let eyeOut = false;
 let validSeconds = 0;
+let baseBrightness = null;
+let baseSamples = [];
+let rgbSeries = [];
+let brightnessSeries = [];
 
 /* 画面切り替え */
 function showScreen(screen) {
@@ -48,7 +40,7 @@ function showScreen(screen) {
   screen.classList.add("active");
 }
 
-/* カメラ起動（2つの video に同じストリームを流す） */
+/* カメラ起動 */
 async function initCamera() {
   const stream = await navigator.mediaDevices.getUserMedia({
     video: { facingMode: "user", frameRate: { ideal: FPS } },
@@ -62,14 +54,26 @@ async function initCamera() {
   await videoMeasure.play();
 }
 
-/* ROI + ガイド線（測定画面側だけ） */
+/* Safariバグ回避：videoStart を完全停止 */
+function stopStartVideo() {
+  try {
+    const stream = videoStart.srcObject;
+    if (stream) {
+      stream.getTracks().forEach(t => t.stop());
+    }
+  } catch {}
+
+  videoStart.pause();
+  videoStart.srcObject = null;
+}
+
+/* 測定フレーム処理 */
 function processMeasureFrame() {
   const w = canvasMeasure.width;
   const h = canvasMeasure.height;
 
   ctxMeasure.drawImage(videoMeasure, 0, 0, w, h);
 
-  /* ガイド線 */
   const topLinePx = h * 0.25;
   const bottomLinePx = h * 0.45;
 
@@ -86,7 +90,6 @@ function processMeasureFrame() {
   ctxMeasure.lineTo(w, bottomLinePx);
   ctxMeasure.stroke();
 
-  /* ROI */
   const size = 28;
   const eyeY = Math.floor((topLinePx + bottomLinePx) / 2);
 
@@ -103,7 +106,6 @@ function processMeasureFrame() {
     return false;
   }
 
-  /* RGB 平均 */
   let r = 0, g = 0, b = 0, c = 0;
   for (let i = 0; i < img.length; i += 4) {
     r += img[i];
@@ -117,46 +119,26 @@ function processMeasureFrame() {
   rgbSeries.push([R, G, B]);
   brightnessSeries.push(brightness);
 
-  /* 基準明るさ */
   if (baseBrightness === null && baseSamples.length < FPS) {
     baseSamples.push(brightness);
-    if (baseSamples.length === FPS) baseBrightness = mean(baseSamples);
+    if (baseSamples.length === FPS) baseBrightness = baseSamples.reduce((a,b)=>a+b)/FPS;
   }
 
-  /* ROI 中心 */
   const roiCenterY = sy + size / 2;
-
-  /* ガイド線帯判定 */
   const inBand = (roiCenterY >= topLinePx && roiCenterY <= bottomLinePx);
 
-  /* 明るさ差分 */
   let diffOK = true;
-  if (baseBrightness) {
-    diffOK = Math.abs(brightness - baseBrightness) < 30;
-  }
+  if (baseBrightness) diffOK = Math.abs(brightness - baseBrightness) < 30;
 
   return inBand && diffOK;
-}
-
-/* 数学 */
-function mean(arr) { return arr.reduce((a, b) => a + b, 0) / arr.length; }
-
-/* 測定終了（簡易版） */
-function finishMeasurement() {
-  running = false;
-  showScreen(resultScreen);
-
-  fatigueEl.textContent = "計算中…";
-  levelEl.textContent = "--";
-  workEl.textContent = "--";
-  dangerEl.textContent = "--";
-
-  resultsEl.textContent = "※ rPPG解析は省略（デバッグ用）";
 }
 
 /* 測定開始 */
 async function startMeasurement() {
   showScreen(measureScreen);
+
+  /* ★ Safariバグ回避：待機画面の video を完全停止 */
+  stopStartVideo();
 
   rgbSeries = [];
   brightnessSeries = [];
@@ -174,7 +156,6 @@ async function startMeasurement() {
 
   running = true;
 
-  /* 測定画面の描画ループ */
   const frameLoop = setInterval(() => {
     if (!running) return clearInterval(frameLoop);
 
@@ -194,7 +175,6 @@ async function startMeasurement() {
 
   }, 1000 / FPS);
 
-  /* カウントダウン */
   const countdown = setInterval(() => {
     if (!running) return clearInterval(countdown);
 
@@ -207,7 +187,7 @@ async function startMeasurement() {
     if (validSeconds >= DURATION_SEC) {
       clearInterval(countdown);
       clearInterval(frameLoop);
-      finishMeasurement();
+      showScreen(resultScreen);
     }
 
   }, 1000);
@@ -215,4 +195,4 @@ async function startMeasurement() {
 
 /* ボタン */
 startBtn.addEventListener("click", startMeasurement);
-retryBtn.addEventListener("click", () => showScreen(startScreen));
+retryBtn.addEventListener("click", () => location.reload());
