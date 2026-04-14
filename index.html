@@ -23,12 +23,15 @@
       top: 38%;
       left: 50%;
       transform: translateX(-50%);
-      width: 220px;
+      width: 80%;
       height: 2px;
-      background: #1e88e5;
-      opacity: 0.7;
-      pointer-events: none;
-    }
+      background: #00b0ff; /* 明るい青 */
+　　  opacity: 0.9;
+ 　　 pointer-events: none;
+　　  z-index: 9999; /* ← 最重要 */
+　　}
+
+
 
     /* 棒ゲージ */
     #progressContainer {
@@ -71,9 +74,12 @@
   <p>目をガイド線に合わせてください（20秒）。</p>
   <button id="startBtn">測定開始</button><br>
 
-  <div id="eyeLine"></div>
-
+  <div style="position:relative; display:inline-block;">
   <video id="video" autoplay playsinline></video>
+  <div id="eyeLine"></div>
+</div>
+
+
   <canvas id="canvas" width="240" height="180"></canvas>
 
   <div id="status"></div>
