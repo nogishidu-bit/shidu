@@ -39,22 +39,33 @@ async function initCamera() {
   video.srcObject = stream;
 }
 
-/* ROI + eyeOut 判定（上下2本ガイド線対応） */
+/* ROI + ガイド線 + eyeOut 判定（canvas 内で完結） */
 function captureFrame() {
   if (!running) return;
   if (video.readyState < 2) return;
 
   const w = canvas.width;
   const h = canvas.height;
+
+  /* --- video を canvas に描画 --- */
   ctx.drawImage(video, 0, 0, w, h);
 
-  /* --- video の実表示サイズを取得 --- */
-  const rect = video.getBoundingClientRect();
-  const videoHeight = rect.height;
+  /* --- ガイド線（canvas に描画）--- */
+  const topLinePx = h * 0.30;
+  const bottomLinePx = h * 0.38;
 
-  /* --- CSS のガイド線位置（%）を px に変換し、canvas に補正 --- */
-  const topLinePx = (videoHeight * 0.30) * (h / videoHeight);
-  const bottomLinePx = (videoHeight * 0.38) * (h / videoHeight);
+  ctx.strokeStyle = "#00b0ff";
+  ctx.lineWidth = 2;
+
+  ctx.beginPath();
+  ctx.moveTo(0, topLinePx);
+  ctx.lineTo(w, topLinePx);
+  ctx.stroke();
+
+  ctx.beginPath();
+  ctx.moveTo(0, bottomLinePx);
+  ctx.lineTo(w, bottomLinePx);
+  ctx.stroke();
 
   /* --- ROI の中心をガイド線中央に合わせる --- */
   const size = 28;
@@ -63,6 +74,11 @@ function captureFrame() {
   const sx = Math.floor(w / 2 - size / 2);
   const sy = Math.min(h - size, Math.max(0, Math.floor(eyeY - size / 2)));
 
+  /* --- ROI の赤枠（デバッグ用）--- */
+  ctx.strokeStyle = "red";
+  ctx.strokeRect(sx, sy, size, size);
+
+  /* --- ROI の画像データ取得 --- */
   let img;
   try {
     img = ctx.getImageData(sx, sy, size, size).data;
@@ -92,7 +108,7 @@ function captureFrame() {
     }
   }
 
-  /* --- ROI の中心（実ピクセル） --- */
+  /* --- ROI の中心（canvas 座標）--- */
   const roiCenterY = sy + size / 2;
 
   /* --- ガイド線帯に入っているか？ --- */
