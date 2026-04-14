@@ -9,24 +9,31 @@
 
 <body>
 
-<!-- ★★★ 共通 video/canvas（画面の外に置く） ★★★ -->
-<div class="videoWrapper">
-  <video id="video" autoplay playsinline></video>
-  <canvas id="canvas" width="240" height="180"></canvas>
-</div>
-
 <!-- ① 待機画面 -->
 <div id="start-screen" class="screen active">
   <header>疲労度チェック rPPG</header>
   <p>目を上下2本のガイド線の間に合わせてください。</p>
+
+  <div class="videoWrapper">
+    <video id="video" autoplay playsinline></video>
+    <canvas id="canvas" width="240" height="180"></canvas>
+  </div>
+
   <button id="startBtn">測定開始</button>
 </div>
 
 <!-- ② 測定中画面 -->
 <div id="measure-screen" class="screen">
   <header>測定中（20秒）</header>
+
+  <div class="videoWrapper">
+    <video id="video" autoplay playsinline></video>
+    <canvas id="canvas" width="240" height="180"></canvas>
+  </div>
+
   <div id="status"></div>
   <div id="faceWarning"></div>
+
   <div id="progressContainer">
     <div id="progressBar"></div>
   </div>
