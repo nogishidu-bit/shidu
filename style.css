@@ -1,5 +1,4 @@
-/* 全体レイアウト */
-body {
+/body {
   margin: 0;
   font-family: system-ui, sans-serif;
   background: #111;
@@ -16,10 +15,8 @@ header {
 
 main {
   padding: 10px;
-  position: relative;
 }
 
-/* カメラ映像 */
 .videoWrapper {
   position: relative;
   display: inline-block;
@@ -33,29 +30,6 @@ video {
   margin-top: 8px;
 }
 
-/* 上下2本ガイド線 */
-#eyeLineTop,
-#eyeLineBottom {
-  position: absolute;
-  left: 50%;
-  transform: translateX(-50%);
-  width: 80%;
-  height: 2px;
-  background: #00b0ff;
-  opacity: 0.9;
-  pointer-events: none;
-  z-index: 9999;
-}
-
-#eyeLineTop {
-  top: 30%;
-}
-
-#eyeLineBottom {
-  top: 38%;
-}
-
-/* 測定開始ボタン */
 #startBtn {
   padding: 10px 20px;
   font-size: 16px;
@@ -70,7 +44,6 @@ video {
   background: #555;
 }
 
-/* ステータス表示 */
 #status {
   font-size: 13px;
   color: #ccc;
@@ -85,7 +58,6 @@ video {
   margin-top: 5px;
 }
 
-/* プログレスバー */
 #progressContainer {
   width: 80%;
   height: 12px;
@@ -102,7 +74,6 @@ video {
   transition: width 0.3s linear, background 0.2s linear;
 }
 
-/* 結果表示ボックス */
 #scoreBox {
   margin-top: 10px;
   padding: 10px;
@@ -123,28 +94,14 @@ video {
   margin-bottom: 4px;
 }
 
-/* スコア色分け */
-.level-safe {
-  color: #4caf50;
-}
+.level-safe { color: #4caf50; }
+.level-normal { color: #8bc34a; }
+.level-caution { color: #ffeb3b; }
+.level-warning { color: #ff9800; }
+.level-danger { color: #f44336; }
 
-.level-normal {
-  color: #8bc34a;
-}
-
-.level-caution {
-  color: #ffeb3b;
-}
-
-.level-warning {
-  color: #ff9800;
-}
-
-.level-danger {
-  color: #f44336;
-}
-
-/* canvas は非表示 */
 canvas {
-  display: none;
+  display: block;
+  margin: 10px auto;
+  border-radius: 8px;
 }
