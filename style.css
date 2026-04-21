@@ -1,4 +1,4 @@
-body {
+/body {
   margin: 0;
   font-family: system-ui, sans-serif;
   background: #111;
@@ -6,13 +6,15 @@ body {
   text-align: center;
 }
 
-.screen {
-  display: none;
-  padding: 10px;
+header {
+  padding: 10px 0;
+  background: #181818;
+  font-size: 18px;
+  font-weight: bold;
 }
 
-.screen.active {
-  display: block;
+main {
+  padding: 10px;
 }
 
 .videoWrapper {
@@ -28,18 +30,7 @@ video {
   margin-top: 8px;
 }
 
-canvas {
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 260px;
-  max-width: 80vw;
-  height: auto;
-  border-radius: 8px;
-  pointer-events: none;
-}
-
-#startBtn, #retryBtn {
+#startBtn {
   padding: 10px 20px;
   font-size: 16px;
   margin: 10px 0;
@@ -47,6 +38,10 @@ canvas {
   border: none;
   background: #1e88e5;
   color: #fff;
+}
+
+#startBtn:disabled {
+  background: #555;
 }
 
 #status {
@@ -78,3 +73,35 @@ canvas {
   background: #1e88e5;
   transition: width 0.3s linear, background 0.2s linear;
 }
+
+#scoreBox {
+  margin-top: 10px;
+  padding: 10px;
+  border-radius: 8px;
+  background: #222;
+  display: inline-block;
+  min-width: 260px;
+}
+
+.label {
+  color: #aaa;
+  font-size: 12px;
+}
+
+.value {
+  font-size: 18px;
+  font-weight: bold;
+  margin-bottom: 4px;
+}
+
+.level-safe { color: #4caf50; }
+.level-normal { color: #8bc34a; }
+.level-caution { color: #ffeb3b; }
+.level-warning { color: #ff9800; }
+.level-danger { color: #f44336; }
+
+canvas {
+  display: block;
+  margin: 10px auto;
+  border-radius: 8px;
+
