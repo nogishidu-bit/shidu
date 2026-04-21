@@ -2,42 +2,36 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8">
-  <title>疲労度チェック rPPG</title>
+  <title>疲労度チェック rPPG（上下2本ガイド線版）</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <link rel="stylesheet" href="style.css?v=1">
+  <meta name="theme-color" content="#111111">
+
+  <link rel="stylesheet" href="style.css">
 </head>
 
 <body>
+<header>疲労度チェック rPPG（上下2本ガイド線版）</header>
 
-<!-- ★★★ 共通 video/canvas（1つだけ） ★★★ -->
-<div class="videoWrapper">
-  <video id="video" autoplay playsinline></video>
+<main>
+  <p>目を上下2本のガイド線の間に合わせてください（20秒）。</p>
+  <button id="startBtn">測定開始</button><br>
+
+  <div class="videoWrapper">
+    <video id="video" autoplay playsinline></video>
+  </div>
+
+  <!-- ガイド線は canvas に描画するため HTML から削除 -->
   <canvas id="canvas" width="240" height="180"></canvas>
-</div>
 
-<!-- ① 待機画面 -->
-<div id="start-screen" class="screen active">
-  <header>疲労度チェック rPPG</header>
-  <p>目を上下2本のガイド線の間に合わせてください。</p>
-  <button id="startBtn">測定開始</button>
-</div>
-
-<!-- ② 測定中画面 -->
-<div id="measure-screen" class="screen">
-  <header>測定中（20秒）</header>
   <div id="status"></div>
   <div id="faceWarning"></div>
+
   <div id="progressContainer">
     <div id="progressBar"></div>
   </div>
-</div>
-
-<!-- ③ 結果画面 -->
-<div id="result-screen" class="screen">
-  <header>測定結果</header>
 
   <div id="scoreBox">
-    <div class="label">疲労スコア</div>
+    <div class="label">疲労スコア（0〜100）</div>
     <div class="value" id="fatigueScore">--</div>
 
     <div class="label">疲労レベル</div>
@@ -51,10 +45,8 @@
 
     <div id="results"></div>
   </div>
+</main>
 
-  <button id="retryBtn">再測定</button>
-</div>
-
-<script src="app.js?v=1"></script>
+<script src="app.js"></script>
 </body>
 </html>
