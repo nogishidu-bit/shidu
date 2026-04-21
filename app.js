@@ -7,10 +7,14 @@ const startScreen = document.getElementById("start-screen");
 const measureScreen = document.getElementById("measure-screen");
 const resultScreen = document.getElementById("result-screen");
 
-/* video/canvas（1つだけ） */
-const video = document.getElementById("video");
-const canvas = document.getElementById("canvas");
-const ctx = canvas.getContext("2d");
+/* video/canvas */
+const videoStart = document.getElementById("videoStart");
+const canvasStart = document.getElementById("canvasStart");
+const ctxStart = canvasStart.getContext("2d");
+
+const videoMeasure = document.getElementById("videoMeasure");
+const canvasMeasure = document.getElementById("canvasMeasure");
+const ctxMeasure = canvasMeasure.getContext("2d");
 
 /* UI */
 const startBtn = document.getElementById("startBtn");
@@ -43,34 +47,55 @@ async function initCamera() {
     audio: false
   });
 
-  video.srcObject = stream;
-  await video.play();
+  videoStart.srcObject = stream;
+  videoMeasure.srcObject = stream;
+
+  await videoStart.play();
+  await videoMeasure.play();
+}
+
+/* ★ Safariバグ完全回避：videoStart を完全停止 + 再描画 */
+function disableStartVideo() {
+  try {
+    const stream = videoStart.srcObject;
+    if (stream) stream.getTracks().forEach(t => t.stop());
+  } catch {}
+
+  videoStart.pause();
+  videoStart.srcObject = null;
+  videoStart.removeAttribute("src");
+  videoStart.load();  // ← Safari で DOM ブロック解除に必須
+
+  // 親要素を強制再描画（Safariバグ回避）
+  const wrapper = videoStart.parentElement;
+  wrapper.style.display = "none";
+  setTimeout(() => {
+    wrapper.style.display = "inline-block";
+  }, 50);
 }
 
 /* 測定フレーム処理 */
-function processFrame() {
-  const w = canvas.width;
-  const h = canvas.height;
+function processMeasureFrame() {
+  const w = canvasMeasure.width;
+  const h = canvasMeasure.height;
 
-  ctx.drawImage(video, 0, 0, w, h);
-
-  if (!measureScreen.classList.contains("active")) return true;
+  ctxMeasure.drawImage(videoMeasure, 0, 0, w, h);
 
   const topLinePx = h * 0.25;
   const bottomLinePx = h * 0.45;
 
-  ctx.strokeStyle = "#00b0ff";
-  ctx.lineWidth = 2;
+  ctxMeasure.strokeStyle = "#00b0ff";
+  ctxMeasure.lineWidth = 2;
 
-  ctx.beginPath();
-  ctx.moveTo(0, topLinePx);
-  ctx.lineTo(w, topLinePx);
-  ctx.stroke();
+  ctxMeasure.beginPath();
+  ctxMeasure.moveTo(0, topLinePx);
+  ctxMeasure.lineTo(w, topLinePx);
+  ctxMeasure.stroke();
 
-  ctx.beginPath();
-  ctx.moveTo(0, bottomLinePx);
-  ctx.lineTo(w, bottomLinePx);
-  ctx.stroke();
+  ctxMeasure.beginPath();
+  ctxMeasure.moveTo(0, bottomLinePx);
+  ctxMeasure.lineTo(w, bottomLinePx);
+  ctxMeasure.stroke();
 
   const size = 28;
   const eyeY = Math.floor((topLinePx + bottomLinePx) / 2);
@@ -78,12 +103,12 @@ function processFrame() {
   const sx = Math.floor(w / 2 - size / 2);
   const sy = Math.min(h - size, Math.max(0, Math.floor(eyeY - size / 2)));
 
-  ctx.strokeStyle = "red";
-  ctx.strokeRect(sx, sy, size, size);
+  ctxMeasure.strokeStyle = "red";
+  ctxMeasure.strokeRect(sx, sy, size, size);
 
   let img;
   try {
-    img = ctx.getImageData(sx, sy, size, size).data;
+    img = ctxMeasure.getImageData(sx, sy, size, size).data;
   } catch {
     return false;
   }
@@ -117,7 +142,11 @@ function processFrame() {
 
 /* 測定開始 */
 async function startMeasurement() {
+  /* ★ まず start-screen を非表示にする */
   showScreen(measureScreen);
+
+  /* ★ Safari DOM ブロック回避：videoStart を完全停止 */
+  disableStartVideo();
 
   rgbSeries = [];
   brightnessSeries = [];
@@ -138,7 +167,7 @@ async function startMeasurement() {
   const frameLoop = setInterval(() => {
     if (!running) return clearInterval(frameLoop);
 
-    const ok = processFrame();
+    const ok = processMeasureFrame();
 
     if (!ok) {
       eyeOut = true;
